@@ -36,17 +36,36 @@
       </section>
 
       <footer class="control-dock">
-        <label class="echo-control">
-          <input type="checkbox" id="echoToggle" />
-          <span class="switch" aria-hidden="true"></span>
-          <span>Echo</span>
-        </label>
+        <div class="draft-panel">
+          <label class="sr-only" for="draftText">Draft message</label>
+          <textarea id="draftText" rows="2" placeholder="Draft message"></textarea>
+        </div>
 
-        <button class="record-button" id="recordButton" type="button" aria-label="Push to talk">
-          <span class="record-core" aria-hidden="true"></span>
-        </button>
+        <div class="toggle-row">
+          <label class="toggle-control">
+            <input type="checkbox" id="echoToggle" />
+            <span class="switch" aria-hidden="true"></span>
+            <span>Echo</span>
+          </label>
 
-        <button class="send-button" id="sendButton" type="button" disabled>Send</button>
+          <label class="toggle-control">
+            <input type="checkbox" id="autoSendToggle" />
+            <span class="switch" aria-hidden="true"></span>
+            <span>Auto Send</span>
+          </label>
+        </div>
+
+        <div class="button-row">
+          <button class="command-button" id="commandButton" type="button" aria-label="Voice command">
+            <span class="command-core" aria-hidden="true"></span>
+          </button>
+
+          <button class="record-button" id="recordButton" type="button" aria-label="Push to talk">
+            <span class="record-core" aria-hidden="true"></span>
+          </button>
+
+          <button class="send-button" id="sendButton" type="button" disabled>Send</button>
+        </div>
       </footer>
     </main>
 

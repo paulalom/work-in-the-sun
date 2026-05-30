@@ -1,9 +1,12 @@
 const appShell = document.querySelector(".app-shell");
 const stateLabel = document.querySelector("#stateLabel");
 const stateDetail = document.querySelector("#stateDetail");
+const commandButton = document.querySelector("#commandButton");
 const recordButton = document.querySelector("#recordButton");
 const sendButton = document.querySelector("#sendButton");
 const echoToggle = document.querySelector("#echoToggle");
+const autoSendToggle = document.querySelector("#autoSendToggle");
+const draftText = document.querySelector("#draftText");
 const feed = document.querySelector(".feed");
 const desktopStatus = document.querySelector("#desktopStatus");
 
@@ -19,6 +22,7 @@ let chunks = [];
 let startedAt = 0;
 let lastTranscript = "";
 let wantsRecording = false;
+let activeCaptureMode = "dictation";
 let activeRecognition = null;
 let recognitionTranscript = "";
 let activeUtterance = null;
@@ -30,11 +34,13 @@ const BrowserSpeechRecognition =
 const useBrowserSpeechDemo = new URLSearchParams(window.location.search).has("browserSpeechDemo");
 const prefersServerTts = navigator.userAgent.includes("Firefox");
 
-function setState(state, label, detail = "") {
+function setState(state, label, detail = "", mode = activeCaptureMode) {
   appShell.classList.toggle("is-listening", state === "listening");
+  appShell.classList.toggle("is-commanding", state === "listening" && mode === "command");
   appShell.classList.toggle("is-processing", state === "processing");
   appShell.classList.toggle("is-speaking", state === "speaking");
-  recordButton.classList.toggle("is-active", state === "listening");
+  commandButton.classList.toggle("is-active", state === "listening" && mode === "command");
+  recordButton.classList.toggle("is-active", state === "listening" && mode === "dictation");
   stateLabel.textContent = label;
   stateDetail.textContent = detail;
 }
@@ -48,6 +54,54 @@ function addMessage(text, type = "system") {
   message.append(paragraph);
   feed.append(message);
   feed.scrollTop = feed.scrollHeight;
+}
+
+function getDraftText() {
+  return draftText.value.trim();
+}
+
+function setDraftText(text, { focus = false } = {}) {
+  draftText.value = text;
+  lastTranscript = getDraftText();
+  sendButton.disabled = !lastTranscript;
+  resizeDraft();
+
+  if (focus) {
+    draftText.focus();
+  }
+}
+
+function appendDraftText(text) {
+  const current = getDraftText();
+  const addition = text.trim();
+
+  if (!addition) {
+    return;
+  }
+
+  setDraftText(current ? `${current} ${addition}` : addition);
+}
+
+function prependDraftText(text) {
+  const current = getDraftText();
+  const addition = text.trim();
+
+  if (!addition) {
+    return;
+  }
+
+  setDraftText(current ? `${addition} ${current}` : addition);
+}
+
+function deleteLastDraftWord() {
+  const current = getDraftText();
+  const next = current.replace(/\s*\S+\s*$/, "").trim();
+  setDraftText(next);
+}
+
+function resizeDraft() {
+  draftText.style.height = "auto";
+  draftText.style.height = `${Math.min(draftText.scrollHeight, 88)}px`;
 }
 
 async function setInitialSpeechMode() {
@@ -76,24 +130,28 @@ async function setInitialSpeechMode() {
 }
 
 async function acceptTranscript(transcript, readyDetail = "Transcript ready") {
-  lastTranscript = transcript.trim();
+  const text = transcript.trim();
 
-  if (!lastTranscript) {
+  if (!text) {
     addMessage("No speech recognized.", "warning");
     sendButton.disabled = true;
     setState("idle", "Ready", "Try again");
     return;
   }
 
-  addMessage(lastTranscript, "user");
-  sendButton.disabled = false;
+  setDraftText(text);
 
   if (echoToggle.checked) {
-    const spoken = await speak(lastTranscript);
+    const spoken = await speak(text);
 
     if (!spoken) {
       addMessage("Echo could not start in this browser.", "warning");
     }
+  }
+
+  if (autoSendToggle.checked) {
+    await sendTranscript("auto");
+    return;
   }
 
   setState("idle", "Ready", readyDetail);
@@ -137,10 +195,11 @@ function getRecorderMimeType() {
   return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
 }
 
-async function startRecording() {
+async function startRecording(mode = "dictation") {
   wantsRecording = true;
+  activeCaptureMode = mode;
 
-  if (useBrowserSpeechDemo && startBrowserRecognition()) {
+  if (useBrowserSpeechDemo && startBrowserRecognition(mode)) {
     return;
   }
 
@@ -179,7 +238,9 @@ async function startRecording() {
       return;
     }
 
-    setState("listening", "Listening", "Recording locally");
+    const label = mode === "command" ? "Command" : "Listening";
+    const detail = mode === "command" ? "Listening for UI command" : "Recording locally";
+    setState("listening", label, detail, mode);
   } catch (error) {
     addMessage(error.message || "Microphone access failed.", "warning");
     setState("idle", "Ready", "Microphone unavailable");
@@ -199,7 +260,7 @@ function stopRecording() {
   }
 }
 
-function startBrowserRecognition() {
+function startBrowserRecognition(mode) {
   if (!BrowserSpeechRecognition) {
     return false;
   }
@@ -218,7 +279,8 @@ function startBrowserRecognition() {
   recognition.maxAlternatives = 1;
 
   recognition.addEventListener("start", () => {
-    setState("listening", "Listening", "Browser speech demo");
+    const label = mode === "command" ? "Command" : "Listening";
+    setState("listening", label, "Browser speech demo", mode);
   });
 
   recognition.addEventListener("result", (event) => {
@@ -246,7 +308,7 @@ function startBrowserRecognition() {
 
   recognition.addEventListener("end", () => {
     activeRecognition = null;
-    acceptTranscript(recognitionTranscript, "Browser speech demo");
+    handleTranscriptResult(recognitionTranscript, mode, "Browser speech demo");
   });
 
   try {
@@ -260,6 +322,7 @@ function startBrowserRecognition() {
 }
 
 async function handleRecordingStop() {
+  const mode = activeCaptureMode;
   const durationMs = Date.now() - startedAt;
   const mimeType = mediaRecorder?.mimeType || "application/octet-stream";
   const audio = new Blob(chunks, { type: mimeType });
@@ -273,23 +336,24 @@ async function handleRecordingStop() {
     return;
   }
 
-  setState("processing", "Processing", `${Math.round(durationMs / 100) / 10}s captured`);
+  const label = mode === "command" ? "Command" : "Processing";
+  setState("processing", label, `${Math.round(durationMs / 100) / 10}s captured`, mode);
 
   try {
     const result = await transcribeAudio(audio, { durationMs, mimeType });
     lastTranscript = result.text.trim();
 
     if (result.blank || !lastTranscript) {
-      lastTranscript = "";
-      sendButton.disabled = true;
+      lastTranscript = getDraftText();
+      sendButton.disabled = !lastTranscript;
       setState("idle", "Ready", "Local Dictate ready");
       return;
     }
 
-    await acceptTranscript(lastTranscript);
+    await handleTranscriptResult(lastTranscript, mode);
   } catch (error) {
     addMessage(error.message || "Speech adapter is not connected.", "warning");
-    sendButton.disabled = true;
+    sendButton.disabled = !getDraftText();
     setState("idle", "Ready", "Speech adapter pending");
   }
 }
@@ -313,6 +377,168 @@ async function transcribeAudio(audio, metadata) {
     text: result.text || "",
     blank: Boolean(result.blank),
   };
+}
+
+async function handleTranscriptResult(transcript, mode, readyDetail = "Transcript ready") {
+  const text = transcript.trim();
+
+  if (!text) {
+    lastTranscript = "";
+    sendButton.disabled = !getDraftText();
+    setState("idle", "Ready", "Local Dictate ready");
+    return;
+  }
+
+  if (mode === "command") {
+    await applyVoiceCommand(text);
+    return;
+  }
+
+  await acceptTranscript(text, readyDetail);
+}
+
+async function applyVoiceCommand(commandText) {
+  const command = commandText.trim();
+  const normalized = normalizeCommand(command);
+
+  if (!normalized) {
+    setState("idle", "Ready", "Local Dictate ready");
+    return;
+  }
+
+  if (matchesCommand(normalized, ["send", "send it", "send message", "queue", "queue it", "submit"])) {
+    await sendTranscript("command");
+    return;
+  }
+
+  if (
+    matchesCommand(normalized, [
+      "clear",
+      "clear draft",
+      "discard",
+      "discard draft",
+      "scratch that",
+      "delete draft",
+    ])
+  ) {
+    setDraftText("");
+    setState("idle", "Ready", "Draft cleared");
+    return;
+  }
+
+  if (matchesCommand(normalized, ["delete last word", "remove last word"])) {
+    deleteLastDraftWord();
+    setState("idle", "Ready", getDraftText() ? "Draft edited" : "Draft cleared");
+    return;
+  }
+
+  if (matchesCommand(normalized, ["echo on", "turn echo on"])) {
+    echoToggle.checked = true;
+    setState("idle", "Ready", "Echo on");
+    return;
+  }
+
+  if (matchesCommand(normalized, ["echo off", "turn echo off"])) {
+    echoToggle.checked = false;
+    setState("idle", "Ready", "Echo off");
+    return;
+  }
+
+  if (matchesCommand(normalized, ["auto send on", "turn auto send on", "autosend on"])) {
+    autoSendToggle.checked = true;
+    setState("idle", "Ready", "Auto Send on");
+    return;
+  }
+
+  if (matchesCommand(normalized, ["auto send off", "turn auto send off", "autosend off"])) {
+    autoSendToggle.checked = false;
+    setState("idle", "Ready", "Auto Send off");
+    return;
+  }
+
+  if (matchesCommand(normalized, ["read draft", "read it back", "repeat draft"])) {
+    const draft = getDraftText();
+
+    if (draft) {
+      await speak(draft);
+      setState("idle", "Ready", "Draft read");
+    } else {
+      setState("idle", "Ready", "No draft");
+    }
+
+    return;
+  }
+
+  const replacement = commandRemainder(command, [
+    "replace draft with",
+    "replace message with",
+    "replace with",
+    "change it to",
+    "change to",
+    "set draft to",
+    "new message",
+  ]);
+
+  if (replacement !== null) {
+    setDraftText(replacement);
+    setState("idle", "Ready", "Draft replaced");
+    return;
+  }
+
+  const appendText = commandRemainder(command, [
+    "append to draft",
+    "append to message",
+    "add to draft",
+    "add to message",
+    "append",
+    "add",
+  ]);
+
+  if (appendText !== null) {
+    appendDraftText(appendText);
+    setState("idle", "Ready", "Draft edited");
+    return;
+  }
+
+  const prependText = commandRemainder(command, ["prepend", "start with", "put before"]);
+
+  if (prependText !== null) {
+    prependDraftText(prependText);
+    setState("idle", "Ready", "Draft edited");
+    return;
+  }
+
+  addMessage(`Command not recognized: ${command}`, "warning");
+  setState("idle", "Ready", "Command not recognized");
+}
+
+function normalizeCommand(command) {
+  return command
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?]+$/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function matchesCommand(normalizedCommand, commands) {
+  return commands.some((command) => normalizedCommand === command);
+}
+
+function commandRemainder(command, prefixes) {
+  for (const prefix of prefixes) {
+    const pattern = new RegExp(`^${escapeRegex(prefix)}[\\s,:-]+(.+)$`, "i");
+    const match = command.trim().match(pattern);
+
+    if (match?.[1]?.trim()) {
+      return match[1].trim();
+    }
+  }
+
+  return null;
+}
+
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function waitForVoices() {
@@ -450,21 +676,26 @@ async function playAudioBuffer(audio) {
   }).finally(() => URL.revokeObjectURL(url));
 }
 
-async function sendTranscript() {
-  if (!lastTranscript) {
+async function sendTranscript(source = "manual") {
+  const text = getDraftText();
+
+  if (!text) {
+    setState("idle", "Ready", "No draft");
     return;
   }
 
-  setState("processing", "Sending", "Desktop handoff");
+  const detail = source === "auto" ? "Auto Send" : "Desktop handoff";
+  setState("processing", "Sending", detail);
 
   try {
     const response = await fetch(api.sendMessage, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        text: lastTranscript,
+        text,
         input: "voice",
         echo: echoToggle.checked,
+        source,
       }),
     });
 
@@ -474,8 +705,9 @@ async function sendTranscript() {
 
     const result = await response.json();
     const status = result.message?.status === "queued" ? "Queued on desktop." : "Sent to desktop.";
+    addMessage(text, "user");
     addMessage(status, "system");
-    sendButton.disabled = true;
+    setDraftText("");
     setState("idle", "Ready", status);
   } catch (error) {
     addMessage(error.message || "Desktop command route is not connected.", "warning");
@@ -483,21 +715,34 @@ async function sendTranscript() {
   }
 }
 
-recordButton.addEventListener("pointerdown", (event) => {
-  event.preventDefault();
-  recordButton.setPointerCapture(event.pointerId);
-  unlockAudioOutput().catch(() => {});
-  startRecording();
-});
+function bindHoldToRecord(button, mode) {
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    button.setPointerCapture(event.pointerId);
+    unlockAudioOutput().catch(() => {});
+    startRecording(mode);
+  });
 
-recordButton.addEventListener("pointerup", (event) => {
-  event.preventDefault();
-  stopRecording();
-});
+  button.addEventListener("pointerup", (event) => {
+    event.preventDefault();
+    stopRecording();
+  });
 
-recordButton.addEventListener("pointercancel", stopRecording);
-recordButton.addEventListener("lostpointercapture", stopRecording);
-sendButton.addEventListener("click", sendTranscript);
+  button.addEventListener("pointercancel", stopRecording);
+  button.addEventListener("lostpointercapture", stopRecording);
+}
+
+bindHoldToRecord(recordButton, "dictation");
+bindHoldToRecord(commandButton, "command");
+sendButton.addEventListener("click", () => sendTranscript("manual"));
+draftText.addEventListener("input", () => {
+  lastTranscript = getDraftText();
+  sendButton.disabled = !lastTranscript;
+  resizeDraft();
+});
+autoSendToggle.addEventListener("change", () => {
+  setState("idle", "Ready", autoSendToggle.checked ? "Auto Send on" : "Auto Send off");
+});
 echoToggle.addEventListener("change", async () => {
   await unlockAudioOutput();
 
@@ -513,6 +758,7 @@ echoToggle.addEventListener("change", async () => {
   }
 });
 setInitialSpeechMode();
+resizeDraft();
 
 window.addEventListener("pagehide", () => {
   stopRecording();

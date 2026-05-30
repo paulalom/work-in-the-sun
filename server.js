@@ -413,6 +413,7 @@ async function queueCodexMessage(request, response) {
     receivedAt: new Date().toISOString(),
     status: "queued",
     input: body.input === "voice" ? "voice" : "text",
+    source: ["manual", "auto", "command"].includes(body.source) ? body.source : "manual",
     echo: Boolean(body.echo),
     text,
   };

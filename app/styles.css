@@ -34,8 +34,21 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .app-shell {
@@ -154,6 +167,14 @@ h1 {
   animation-delay: 0.32s;
 }
 
+.is-commanding .pulse {
+  border-color: rgba(37, 99, 235, 0.28);
+}
+
+.is-commanding .pulse span {
+  background: var(--accent-2);
+}
+
 .is-processing .pulse span {
   background: var(--accent-2);
   animation: meter 0.9s ease-in-out infinite;
@@ -195,7 +216,7 @@ h1 {
   flex-direction: column;
   gap: 12px;
   overflow: auto;
-  padding: 16px 16px 132px;
+  padding: 16px 16px 252px;
   background: #fbfcfe;
 }
 
@@ -238,18 +259,56 @@ h1 {
   width: min(100%, 560px);
   margin: 0 auto;
   transform: translateX(-50%);
-  min-height: 116px;
+  min-height: 232px;
   display: grid;
-  grid-template-columns: minmax(72px, 1fr) auto minmax(72px, 1fr);
-  align-items: center;
-  gap: 18px;
+  grid-template-rows: auto auto auto;
+  gap: 12px;
   padding: 18px 18px calc(18px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.94);
   backdrop-filter: blur(18px);
 }
 
-.echo-control {
+.draft-panel {
+  min-width: 0;
+}
+
+.draft-panel textarea {
+  width: 100%;
+  max-height: 88px;
+  min-height: 54px;
+  resize: none;
+  overflow: auto;
+  display: block;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: var(--text);
+  line-height: 1.32;
+}
+
+.draft-panel textarea::placeholder {
+  color: #8a96a8;
+}
+
+.toggle-row,
+.button-row {
+  display: grid;
+  align-items: center;
+}
+
+.toggle-row {
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.button-row {
+  grid-template-columns: minmax(64px, 1fr) auto minmax(72px, 1fr);
+  gap: 16px;
+}
+
+.toggle-control {
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -258,7 +317,7 @@ h1 {
   font-weight: 700;
 }
 
-.echo-control input {
+.toggle-control input {
   position: absolute;
   opacity: 0;
   pointer-events: none;
@@ -287,13 +346,49 @@ h1 {
   transition: transform 160ms ease;
 }
 
-.echo-control input:checked + .switch {
+.toggle-control input:checked + .switch {
   border-color: rgba(15, 118, 110, 0.3);
   background: var(--accent);
 }
 
-.echo-control input:checked + .switch::before {
+.toggle-control input:checked + .switch::before {
   transform: translateX(20px);
+}
+
+.command-button {
+  justify-self: start;
+  width: 58px;
+  height: 58px;
+  border: 1px solid rgba(37, 99, 235, 0.28);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent-2);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.2);
+  touch-action: none;
+}
+
+.command-button:active,
+.command-button.is-active {
+  transform: translateY(1px) scale(0.98);
+  background: #1d4ed8;
+}
+
+.command-core {
+  position: relative;
+  width: 28px;
+  height: 22px;
+  border-top: 4px solid rgba(255, 255, 255, 0.95);
+  border-bottom: 4px solid rgba(255, 255, 255, 0.95);
+}
+
+.command-core::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 0;
+  width: 28px;
+  border-top: 4px solid rgba(255, 255, 255, 0.95);
 }
 
 .record-button {
@@ -346,7 +441,8 @@ h1 {
 }
 
 button:focus-visible,
-.echo-control input:focus-visible + .switch {
+.toggle-control input:focus-visible + .switch,
+.draft-panel textarea:focus-visible {
   outline: 3px solid rgba(37, 99, 235, 0.26);
   outline-offset: 3px;
 }
@@ -363,13 +459,21 @@ button:focus-visible,
   }
 
   .control-dock {
-    gap: 12px;
     padding-right: 14px;
     padding-left: 14px;
   }
 
-  .echo-control {
+  .toggle-control {
     font-size: 0.92rem;
+  }
+
+  .button-row {
+    gap: 12px;
+  }
+
+  .command-button {
+    width: 54px;
+    height: 54px;
   }
 
   .record-button {
