@@ -12,9 +12,19 @@ Work in the Sun should treat the phone UI as a remote command surface, not as th
 
 This keeps Codex as one possible target rather than the protocol itself. A future bridge can route the same envelopes to Codex, Claude, Cursor, Aider, a browser automation agent, a desktop-control agent, or a custom supervisor.
 
-## Direct Codex Push
+## Codex Desktop Push
 
-The generic queue remains the core contract, but the backend also has a Codex driver for targets with a real Codex thread id. When `CODEX_DIRECT_SEND` is not `0`, a queued command whose target is `provider: "codex"` and whose `id` or `sessionHint` contains a Codex thread UUID is also sent to Codex through the local experimental app-server protocol:
+The generic queue remains the core contract, but the backend also has Codex delivery drivers. On Windows, when `CODEX_DIRECT_SEND` is not `0`, Codex targets are sent through the visible Codex desktop window by default:
+
+1. Find the Codex window with Windows UI Automation.
+2. If the selected target names a chat, click the matching visible sidebar chat.
+3. Focus and briefly highlight the ProseMirror composer.
+4. Paste the command through the clipboard, restore the prior clipboard, and press Enter.
+5. Poll the visible UI Automation document text and relay visible output changes into `.local/agent-events.jsonl`.
+
+This keeps the desktop app as the authority for the visible chat, streaming UI, and permission controls. It is intentionally more like a careful desktop agent than a hidden API call.
+
+Set `CODEX_DELIVERY_MODE=app-server-stdio` to use the previous experimental app-server path instead:
 
 1. Start `codex app-server --listen stdio://`.
 2. Initialize the app-server client.
@@ -22,9 +32,9 @@ The generic queue remains the core contract, but the backend also has a Codex dr
 4. `turn/start` with the natural language command as text input.
 5. Stream completed Codex agent messages back into `.local/agent-events.jsonl`.
 
-This is still intentionally backend-to-agent, not browser-to-Codex. The phone never receives Codex credentials or talks to Codex directly. If a Codex target is a fuzzy phrase rather than a UUID, the app leaves the command in the generic queue and asks the user to choose a listed chat first.
+This is still intentionally backend-to-agent, not browser-to-Codex. The phone never receives Codex credentials or talks to Codex directly.
 
-Interactive approval prompts are not handled by the phone bridge yet. If Codex asks for command or file-change approval during a direct pushed turn, the bridge records a warning event and cancels that approval instead of approving privileged work automatically.
+Interactive approval prompts are not handled by the hidden app-server fallback. If Codex asks for command or file-change approval during an app-server pushed turn, the bridge records a warning event and cancels that approval instead of approving privileged work automatically.
 
 ## Active Target
 
