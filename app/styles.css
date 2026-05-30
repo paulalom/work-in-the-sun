@@ -216,7 +216,7 @@ h1 {
   flex-direction: column;
   gap: 12px;
   overflow: auto;
-  padding: 16px 16px 252px;
+  padding: 16px 16px 292px;
   background: #fbfcfe;
 }
 
@@ -259,7 +259,7 @@ h1 {
   width: min(100%, 560px);
   margin: 0 auto;
   transform: translateX(-50%);
-  min-height: 232px;
+  min-height: 272px;
   display: grid;
   grid-template-rows: auto auto auto;
   gap: 12px;

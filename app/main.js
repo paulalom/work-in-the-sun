@@ -6,6 +6,7 @@ const recordButton = document.querySelector("#recordButton");
 const sendButton = document.querySelector("#sendButton");
 const echoToggle = document.querySelector("#echoToggle");
 const autoSendToggle = document.querySelector("#autoSendToggle");
+const responseAudioToggle = document.querySelector("#responseAudioToggle");
 const draftText = document.querySelector("#draftText");
 const feed = document.querySelector(".feed");
 const desktopStatus = document.querySelector("#desktopStatus");
@@ -28,6 +29,7 @@ let recognitionTranscript = "";
 let activeUtterance = null;
 let audioContext = null;
 let speechUnlocked = false;
+let responseAudioQueue = Promise.resolve();
 
 const BrowserSpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition || null;
@@ -39,6 +41,7 @@ const commandHelp = [
   "delete last word",
   "echo on / echo off",
   "auto send on / auto send off",
+  "responses on / responses off",
   "read draft",
   "append ...",
   "prepend ...",
@@ -57,7 +60,7 @@ function setState(state, label, detail = "", mode = activeCaptureMode) {
   stateDetail.textContent = detail;
 }
 
-function addMessage(text, type = "system") {
+function addMessage(text, type = "system", options = {}) {
   const message = document.createElement("article");
   message.className = `message message-${type}`;
 
@@ -66,11 +69,51 @@ function addMessage(text, type = "system") {
   message.append(paragraph);
   feed.append(message);
   feed.scrollTop = feed.scrollHeight;
+
+  const shouldSpeak =
+    options.speak ?? (responseAudioToggle.checked && ["system", "warning"].includes(type));
+
+  if (shouldSpeak) {
+    queueResponseAudio(text);
+  }
 }
 
 function showCommandHelp() {
   addMessage(`Commands: ${commandHelp.join("; ")}.`, "system");
   setState("idle", "Ready", "Commands listed");
+}
+
+function queueResponseAudio(text) {
+  const response = text.trim();
+
+  if (!response) {
+    return;
+  }
+
+  responseAudioQueue = responseAudioQueue
+    .catch(() => {})
+    .then(() => {
+      if (!responseAudioToggle.checked) {
+        return false;
+      }
+
+      return speak(response, "Response", "Reading response");
+    })
+    .then((spoken) => {
+      if (!spoken) {
+        setState("idle", "Ready", "Response audio unavailable");
+      }
+    });
+}
+
+function setResponseAudio(enabled, { announce = true } = {}) {
+  responseAudioToggle.checked = enabled;
+  const message = enabled ? "Responses on." : "Responses off.";
+  setState("idle", "Ready", enabled ? "Responses on" : "Responses off");
+
+  if (announce) {
+    addMessage(message, "system", { speak: enabled });
+  }
 }
 
 function getDraftText() {
@@ -503,6 +546,26 @@ function parseSingleVoiceCommand(command) {
       commands: ["auto send off", "turn auto send off", "autosend off"],
     },
     {
+      type: "responsesOn",
+      commands: [
+        "responses on",
+        "response audio on",
+        "read responses on",
+        "turn responses on",
+        "turn response audio on",
+      ],
+    },
+    {
+      type: "responsesOff",
+      commands: [
+        "responses off",
+        "response audio off",
+        "read responses off",
+        "turn responses off",
+        "turn response audio off",
+      ],
+    },
+    {
       type: "readDraft",
       commands: ["read draft", "read it back", "repeat draft"],
     },
@@ -588,6 +651,14 @@ async function applySingleVoiceCommand(action) {
     case "autoSendOff":
       autoSendToggle.checked = false;
       setState("idle", "Ready", "Auto Send off");
+      return;
+
+    case "responsesOn":
+      setResponseAudio(true);
+      return;
+
+    case "responsesOff":
+      setResponseAudio(false);
       return;
 
     case "readDraft": {
@@ -685,21 +756,21 @@ function waitForVoices() {
   });
 }
 
-async function speak(text) {
+async function speak(text, label = "Echo", detail = "Reading transcript") {
   if (prefersServerTts) {
-    return speakWithServer(text);
+    return speakWithServer(text, label, detail);
   }
 
-  const browserSpoken = await speakWithBrowser(text);
+  const browserSpoken = await speakWithBrowser(text, label, detail);
 
   if (browserSpoken) {
     return true;
   }
 
-  return speakWithServer(text);
+  return speakWithServer(text, label, detail);
 }
 
-async function speakWithBrowser(text) {
+async function speakWithBrowser(text, label, detail) {
   await waitForVoices();
 
   return new Promise((resolve) => {
@@ -729,7 +800,7 @@ async function speakWithBrowser(text) {
     }
 
     utterance.addEventListener("start", () => {
-      setState("speaking", "Echo", "Reading transcript");
+      setState("speaking", label, detail);
     });
     utterance.addEventListener("end", () => finish(true), { once: true });
     utterance.addEventListener("error", () => finish(false), { once: true });
@@ -737,7 +808,7 @@ async function speakWithBrowser(text) {
   });
 }
 
-async function speakWithServer(text) {
+async function speakWithServer(text, label, detail) {
   try {
     const response = await fetch(api.synthesize, {
       method: "POST",
@@ -750,14 +821,14 @@ async function speakWithServer(text) {
     }
 
     const audio = await response.arrayBuffer();
-    await playAudioBuffer(audio);
+    await playAudioBuffer(audio, label, detail);
     return true;
   } catch {
     return false;
   }
 }
 
-async function playAudioBuffer(audio) {
+async function playAudioBuffer(audio, label, detail) {
   if (audioContext) {
     if (audioContext.state === "suspended") {
       await audioContext.resume();
@@ -770,7 +841,7 @@ async function playAudioBuffer(audio) {
       source.buffer = decoded;
       source.connect(audioContext.destination);
       source.addEventListener("ended", resolve, { once: true });
-      setState("speaking", "Echo", "Reading transcript");
+      setState("speaking", label, detail);
       source.start();
     });
 
@@ -782,7 +853,7 @@ async function playAudioBuffer(audio) {
   const player = new Audio(url);
 
   await new Promise((resolve, reject) => {
-    player.addEventListener("playing", () => setState("speaking", "Echo", "Reading transcript"), {
+    player.addEventListener("playing", () => setState("speaking", label, detail), {
       once: true,
     });
     player.addEventListener("ended", resolve, { once: true });
@@ -857,6 +928,10 @@ draftText.addEventListener("input", () => {
 });
 autoSendToggle.addEventListener("change", () => {
   setState("idle", "Ready", autoSendToggle.checked ? "Auto Send on" : "Auto Send off");
+});
+responseAudioToggle.addEventListener("change", async () => {
+  await unlockAudioOutput();
+  setResponseAudio(responseAudioToggle.checked);
 });
 echoToggle.addEventListener("change", async () => {
   await unlockAudioOutput();
