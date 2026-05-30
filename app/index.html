@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Work in the Sun</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="top-bar">
+        <div>
+          <p class="kicker">Work in the Sun</p>
+          <h1>Voice Console</h1>
+        </div>
+        <div class="desktop-status" id="desktopStatus">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span>Desktop</span>
+        </div>
+      </header>
+
+      <section class="stage" aria-live="polite">
+        <div class="pulse" id="pulse" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <p class="state-label" id="stateLabel">Ready</p>
+        <p class="state-detail" id="stateDetail">Speech adapter pending</p>
+      </section>
+
+      <section class="feed" aria-label="Session">
+        <article class="message message-system">
+          <p>Checking Local Dictate.</p>
+        </article>
+      </section>
+
+      <footer class="control-dock">
+        <label class="echo-control">
+          <input type="checkbox" id="echoToggle" />
+          <span class="switch" aria-hidden="true"></span>
+          <span>Echo</span>
+        </label>
+
+        <button class="record-button" id="recordButton" type="button" aria-label="Push to talk">
+          <span class="record-core" aria-hidden="true"></span>
+        </button>
+
+        <button class="send-button" id="sendButton" type="button" disabled>Send</button>
+      </footer>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "work-in-the-sun",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node server.js",
+    "check": "node --check server.js && node --check app/main.js"
+  }
+}

@@ -9,16 +9,36 @@ The core idea is simple: keep the serious compute, credentials, editor state, an
 - Enable remote development workflows from mobile and secondary devices.
 - Keep source code and secrets anchored on the desktop machine.
 - Support AI tooling that can operate against the desktop workspace.
-- Use secure tunnels rather than broad inbound network exposure.
+- Use Tailscale rather than broad inbound network exposure.
 - Make setup repeatable enough to trust and pleasant enough to actually use.
 
 ## Early Scope
 
 - Define the remote access architecture.
-- Evaluate tunnel options and authentication models.
+- Use Tailscale on the phone and desktop for the MVP tunnel.
 - Prototype a phone-to-desktop development loop.
 - Document security assumptions, risks, and mitigations.
 - Build toward a small, reliable local control surface.
+
+## Docs
+
+- [Goals and Decisions](docs/goals-and-decisions.md)
+
+## UI Prototype
+
+Install the Local Dictate release dependency:
+
+```powershell
+.\scripts\install-local-dictate.ps1
+```
+
+Run the desktop-hosted web app:
+
+```powershell
+npm run dev
+```
+
+The backend also needs `ffmpeg` on `PATH`, or `FFMPEG_PATH` set. For phone testing, serve it over Tailscale HTTPS so browser audio capture is allowed.
 
 ## Status
 
