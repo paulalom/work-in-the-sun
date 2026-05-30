@@ -14,6 +14,8 @@ const CODEX_INBOX_PATH = process.env.CODEX_INBOX_PATH || path.join(LOCAL_DIR, "c
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_JSON_BYTES = 64 * 1024;
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
+const SILENCE_RMS_THRESHOLD = Number(process.env.SILENCE_RMS_THRESHOLD || 0.003);
+const SILENCE_PEAK_THRESHOLD = Number(process.env.SILENCE_PEAK_THRESHOLD || 0.02);
 
 const LOCAL_DICTATE_CANDIDATES = [
   process.env.LOCAL_DICTATE_ROOT,
@@ -120,6 +122,65 @@ function audioExtension(contentType = "") {
   if (contentType.includes("mp4")) return "m4a";
   if (contentType.includes("wav")) return "wav";
   return "bin";
+}
+
+function normalizeTranscript(text) {
+  const transcript = text.trim();
+
+  if (isBlankAudioTranscript(transcript)) {
+    return "";
+  }
+
+  return transcript;
+}
+
+function isBlankAudioTranscript(text) {
+  return /^\[?\(?blank[_\s-]*audio\)?\]?\.?$/i.test(text.trim());
+}
+
+async function isEffectivelySilentWav(wavPath) {
+  const wav = await fsp.readFile(wavPath);
+  const dataOffset = findWavDataOffset(wav);
+
+  if (dataOffset < 0) {
+    return false;
+  }
+
+  const sampleCount = Math.floor((wav.length - dataOffset) / 2);
+
+  if (!sampleCount) {
+    return true;
+  }
+
+  let sumSquares = 0;
+  let peak = 0;
+
+  for (let offset = dataOffset; offset + 1 < wav.length; offset += 2) {
+    const sample = Math.abs(wav.readInt16LE(offset)) / 32768;
+    sumSquares += sample * sample;
+    peak = Math.max(peak, sample);
+  }
+
+  const rms = Math.sqrt(sumSquares / sampleCount);
+  return rms <= SILENCE_RMS_THRESHOLD && peak <= SILENCE_PEAK_THRESHOLD;
+}
+
+function findWavDataOffset(wav) {
+  let offset = 12;
+
+  while (offset + 8 <= wav.length) {
+    const chunkId = wav.toString("ascii", offset, offset + 4);
+    const chunkSize = wav.readUInt32LE(offset + 4);
+    const dataOffset = offset + 8;
+
+    if (chunkId === "data") {
+      return dataOffset;
+    }
+
+    offset = dataOffset + chunkSize + (chunkSize % 2);
+  }
+
+  return -1;
 }
 
 function readBody(request, maxBytes) {
@@ -254,6 +315,15 @@ async function transcribe(request, response) {
       wavPath,
     ]);
 
+    if (await isEffectivelySilentWav(wavPath)) {
+      json(response, 200, {
+        text: "",
+        blank: true,
+        engine: "silence-gate",
+      });
+      return;
+    }
+
     const result = await run(
       localDictate.cli,
       [
@@ -269,8 +339,11 @@ async function transcribe(request, response) {
       { cwd: localDictate.root },
     );
 
+    const text = normalizeTranscript(result.stdout);
+
     json(response, 200, {
-      text: result.stdout.trim(),
+      text,
+      blank: !text,
       engine: "local-dictate",
     });
   } finally {

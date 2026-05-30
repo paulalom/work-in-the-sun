@@ -276,13 +276,13 @@ async function handleRecordingStop() {
   setState("processing", "Processing", `${Math.round(durationMs / 100) / 10}s captured`);
 
   try {
-    const transcript = await transcribeAudio(audio, { durationMs, mimeType });
-    lastTranscript = transcript.trim();
+    const result = await transcribeAudio(audio, { durationMs, mimeType });
+    lastTranscript = result.text.trim();
 
-    if (!lastTranscript) {
-      addMessage("Speech adapter returned no text.", "warning");
+    if (result.blank || !lastTranscript) {
+      lastTranscript = "";
       sendButton.disabled = true;
-      setState("idle", "Ready", "Speech adapter pending");
+      setState("idle", "Ready", "Local Dictate ready");
       return;
     }
 
@@ -309,7 +309,10 @@ async function transcribeAudio(audio, metadata) {
   }
 
   const result = await response.json();
-  return result.text || "";
+  return {
+    text: result.text || "",
+    blank: Boolean(result.blank),
+  };
 }
 
 function waitForVoices() {
