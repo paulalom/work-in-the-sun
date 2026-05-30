@@ -40,6 +40,8 @@ npm run dev
 
 The backend also needs `ffmpeg` on `PATH`, or `FFMPEG_PATH` set. For phone testing, serve it over Tailscale HTTPS so browser audio capture is allowed.
 
+Sent transcripts are queued locally in `.local/codex-messages.jsonl` until the Codex command runner exists.
+
 ## Status
 
 Project initialized. Architecture and implementation details are intentionally open while the safest, simplest workflow is designed.

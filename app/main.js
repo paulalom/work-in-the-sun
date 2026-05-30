@@ -469,9 +469,11 @@ async function sendTranscript() {
       throw new Error("Desktop command route is not connected.");
     }
 
-    addMessage("Sent to desktop.", "system");
+    const result = await response.json();
+    const status = result.message?.status === "queued" ? "Queued on desktop." : "Sent to desktop.";
+    addMessage(status, "system");
     sendButton.disabled = true;
-    setState("idle", "Ready", "Desktop received");
+    setState("idle", "Ready", status);
   } catch (error) {
     addMessage(error.message || "Desktop command route is not connected.", "warning");
     setState("idle", "Ready", "Desktop route pending");

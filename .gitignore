@@ -33,6 +33,7 @@ venv/
 tmp/
 temp/
 .cache/
+.local/
 
 # Downloaded local runtime dependencies
 vendor/local-dictate/

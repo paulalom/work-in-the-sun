@@ -9,6 +9,8 @@ const path = require("path");
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 4173);
 const APP_DIR = path.join(__dirname, "app");
+const LOCAL_DIR = path.join(__dirname, ".local");
+const CODEX_INBOX_PATH = process.env.CODEX_INBOX_PATH || path.join(LOCAL_DIR, "codex-messages.jsonl");
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_JSON_BYTES = 64 * 1024;
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
@@ -324,6 +326,36 @@ async function synthesize(request, response) {
   }
 }
 
+async function queueCodexMessage(request, response) {
+  const body = await readJson(request, MAX_JSON_BYTES);
+  const text = String(body.text || "").trim();
+
+  if (!text) {
+    json(response, 400, { error: "Missing message text." });
+    return;
+  }
+
+  const message = {
+    id: crypto.randomUUID(),
+    receivedAt: new Date().toISOString(),
+    status: "queued",
+    input: body.input === "voice" ? "voice" : "text",
+    echo: Boolean(body.echo),
+    text,
+  };
+
+  await fsp.mkdir(path.dirname(CODEX_INBOX_PATH), { recursive: true });
+  await fsp.appendFile(CODEX_INBOX_PATH, `${JSON.stringify(message)}\n`, "utf8");
+
+  json(response, 202, {
+    message: {
+      id: message.id,
+      status: message.status,
+      receivedAt: message.receivedAt,
+    },
+  });
+}
+
 async function serveStatic(request, response, pathname) {
   const relativePath = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
   const filePath = path.resolve(APP_DIR, relativePath);
@@ -380,7 +412,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/api/codex/messages") {
-      json(response, 501, { error: "Codex command route is not implemented yet." });
+      await queueCodexMessage(request, response);
       return;
     }
 
