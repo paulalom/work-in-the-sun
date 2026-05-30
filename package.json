@@ -6,6 +6,6 @@
   "scripts": {
     "dev": "node server.js",
     "mcp": "node mcp-server.js",
-    "check": "node --check server.js && node --check app/main.js && node --check lib/agent-store.js && node --check lib/codex-catalog.js && node --check mcp-server.js"
+    "check": "node --check server.js && node --check app/main.js && node --check lib/agent-store.js && node --check lib/codex-bridge.js && node --check lib/codex-catalog.js && node --check mcp-server.js"
   }
 }

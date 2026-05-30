@@ -12,6 +12,20 @@ Work in the Sun should treat the phone UI as a remote command surface, not as th
 
 This keeps Codex as one possible target rather than the protocol itself. A future bridge can route the same envelopes to Codex, Claude, Cursor, Aider, a browser automation agent, a desktop-control agent, or a custom supervisor.
 
+## Direct Codex Push
+
+The generic queue remains the core contract, but the backend also has a Codex driver for targets with a real Codex thread id. When `CODEX_DIRECT_SEND` is not `0`, a queued command whose target is `provider: "codex"` and whose `id` or `sessionHint` contains a Codex thread UUID is also sent to Codex through the local experimental app-server protocol:
+
+1. Start `codex app-server --listen stdio://`.
+2. Initialize the app-server client.
+3. `thread/resume` the selected thread, or `thread/start` when the target mode is `new`.
+4. `turn/start` with the natural language command as text input.
+5. Stream completed Codex agent messages back into `.local/agent-events.jsonl`.
+
+This is still intentionally backend-to-agent, not browser-to-Codex. The phone never receives Codex credentials or talks to Codex directly. If a Codex target is a fuzzy phrase rather than a UUID, the app leaves the command in the generic queue and asks the user to choose a listed chat first.
+
+Interactive approval prompts are not handled by the phone bridge yet. If Codex asks for command or file-change approval during a direct pushed turn, the bridge records a warning event and cancels that approval instead of approving privileged work automatically.
+
 ## Active Target
 
 The app stores the selected target in `.local/agent-state.json`.

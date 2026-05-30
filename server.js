@@ -6,6 +6,7 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 const agentStore = require("./lib/agent-store");
+const codexBridge = require("./lib/codex-bridge");
 const codexCatalog = require("./lib/codex-catalog");
 
 const HOST = process.env.HOST || "127.0.0.1";
@@ -414,26 +415,42 @@ async function queueAgentCommand(request, response) {
   const body = await readJson(request, MAX_JSON_BYTES);
 
   try {
+    const target = body.target
+      ? agentStore.normalizeAgentTarget(body.target)
+      : await agentStore.getActiveTarget();
+    const deliveryPreview = codexBridge.dispatchRoute({ target });
     const command = await agentStore.appendCommand({
       text: body.text,
       input: body.input,
       source: body.source,
       echo: body.echo,
-      target: body.target,
+      target,
+      status: deliveryPreview.accepted ? "dispatching" : undefined,
     });
+    const delivery = codexBridge.dispatch(command);
+    const status = delivery.accepted ? "dispatching" : command.status;
+    const deliverySummary = {
+      provider: command.target?.provider,
+      direct: delivery.accepted,
+      reason: delivery.reason,
+      mode: delivery.mode,
+      threadId: delivery.threadId,
+    };
 
     json(response, 202, {
       command: {
         id: command.id,
-        status: command.status,
+        status,
         receivedAt: command.receivedAt,
         target: command.target,
+        delivery: deliverySummary,
       },
       message: {
         id: command.id,
-        status: command.status,
+        status,
         receivedAt: command.receivedAt,
         target: command.target,
+        delivery: deliverySummary,
       },
     });
   } catch (error) {
@@ -554,6 +571,7 @@ const server = http.createServer(async (request, response) => {
           activeTarget,
           commandsPath: agentStore.paths.commands,
           eventsPath: agentStore.paths.events,
+          codexDirect: codexBridge.status(),
         },
       });
       return;
