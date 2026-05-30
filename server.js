@@ -482,6 +482,7 @@ async function listAgentCatalog(response, url, kind) {
   const options = {
     after: url.searchParams.get("after"),
     limit: url.searchParams.get("limit"),
+    project: url.searchParams.get("project"),
   };
 
   if (kind === "projects") {

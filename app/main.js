@@ -56,6 +56,8 @@ const commandHelp = [
   "responses on / responses off",
   "list",
   "list projects / list chats",
+  "list work in the sun",
+  "list chats in work in the sun",
   "continue",
   "use codex work in the sun agent chat",
   "use codex work in the sun new",
@@ -316,6 +318,42 @@ function parseAgentTargetCommand(command) {
   };
 }
 
+function parseProjectChatListCommand(command) {
+  const project = commandRemainder(command, [
+    "list chats in",
+    "list chats for",
+    "show chats in",
+    "show chats for",
+    "list conversations in",
+    "list conversations for",
+    "show conversations in",
+    "show conversations for",
+    "list in",
+    "show in",
+  ]);
+
+  if (project !== null) {
+    return project;
+  }
+
+  const listTarget = commandRemainder(command, ["list", "show"]);
+  const normalizedTarget = normalizeCommand(listTarget || "");
+  const reservedListTargets = ["projects", "project", "chats", "chat", "conversations"];
+
+  if (
+    listTarget !== null &&
+    !reservedListTargets.some((target) => normalizedTarget === target || normalizedTarget.startsWith(`${target} `))
+  ) {
+    return listTarget;
+  }
+
+  if (activeListContext?.kind === "choices" && command.trim()) {
+    return command.trim();
+  }
+
+  return null;
+}
+
 async function setAgentTarget(target) {
   setState("processing", "Routing", "Updating agent target");
 
@@ -392,6 +430,10 @@ async function fetchCatalog(kind, options = {}) {
     params.set("limit", String(options.limit));
   }
 
+  if (options.project) {
+    params.set("project", options.project);
+  }
+
   const suffix = params.toString() ? `?${params}` : "";
   const response = await fetch(`${api.catalog}/${kind}${suffix}`);
 
@@ -429,23 +471,37 @@ function formatChat(chat, index, start) {
   return `${number}. ${chat.label}${project}`;
 }
 
-async function listChats(after = 0) {
-  setState("processing", "Listing", "Loading Codex chats");
+async function listChats(after = 0, project = "") {
+  const scoped = project.trim();
+  const loadingDetail = scoped ? `Loading chats in ${scoped}` : "Loading Codex chats";
+  setState("processing", "Listing", loadingDetail);
 
   try {
-    const result = await fetchCatalog("chats", { after, limit: 5 });
+    const result = await fetchCatalog("chats", { after, limit: 5, project: scoped });
     const chats = result.chats || [];
+    const projectLabel = result.project?.label || scoped;
+
+    if (result.projectMissing) {
+      activeListContext = { kind: "choices" };
+      addMessage(`No Codex project matched ${scoped}.`, "warning");
+      setState("idle", "Ready", "Project not found");
+      return;
+    }
 
     if (!chats.length) {
       activeListContext = null;
-      announceCommand("No more Codex chats found.", "No more chats");
+      announceCommand(
+        projectLabel ? `No Codex chats found in ${projectLabel}.` : "No more Codex chats found.",
+        "No more chats",
+      );
       return;
     }
 
     const chatText = chats.map((chat, index) => formatChat(chat, index, after)).join("; ");
     const hasMore = result.cursor < result.total;
-    activeListContext = hasMore ? { kind: "chats", cursor: result.cursor } : null;
-    addMessage(`Chats: ${chatText}.${hasMore ? " Say continue for more." : ""}`, "system");
+    activeListContext = hasMore ? { kind: "chats", cursor: result.cursor, project: scoped } : null;
+    const label = projectLabel ? `Chats in ${projectLabel}` : "Chats";
+    addMessage(`${label}: ${chatText}.${hasMore ? " Say continue for more." : ""}`, "system");
     setState("idle", "Ready", hasMore ? "Say continue for more" : "Chats listed");
   } catch (error) {
     addMessage(error.message || "Could not load Codex chats.", "warning");
@@ -455,7 +511,7 @@ async function listChats(after = 0) {
 
 async function continueList() {
   if (activeListContext?.kind === "chats") {
-    await listChats(activeListContext.cursor);
+    await listChats(activeListContext.cursor, activeListContext.project || "");
     return;
   }
 
@@ -844,6 +900,12 @@ function parseSingleVoiceCommand(command) {
     return { type: "continueList" };
   }
 
+  const projectChatList = parseProjectChatListCommand(command);
+
+  if (projectChatList) {
+    return { type: "listChats", project: projectChatList };
+  }
+
   const commandGroups = [
     {
       type: "send",
@@ -1016,7 +1078,7 @@ async function applySingleVoiceCommand(action) {
       return;
 
     case "listChats":
-      await listChats(0);
+      await listChats(0, action.project || "");
       return;
 
     case "continueList":

@@ -49,9 +49,11 @@ Hold the command button and say:
 - `list`
 - `list projects`
 - `list chats`
+- `list work in the sun`
+- `list chats in work in the sun`
 - `continue`
 
-`list` asks whether to list projects or chats. `list projects` reads Codex desktop project roots. `list chats` reads recent Codex chats in pages of five, ordered by last use. `continue` reads the next page of chats when more are available.
+`list` asks whether to list projects or chats. `list projects` reads Codex desktop project roots. `list chats` reads recent Codex chats in pages of five, ordered by last use. A project phrase after `list`, such as `list work in the sun`, lists chats for that project. `continue` reads the next page of chats when more are available.
 
 ## Command Envelope
 
