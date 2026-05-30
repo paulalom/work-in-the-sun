@@ -33,6 +33,18 @@ const BrowserSpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition || null;
 const useBrowserSpeechDemo = new URLSearchParams(window.location.search).has("browserSpeechDemo");
 const prefersServerTts = navigator.userAgent.includes("Firefox");
+const commandHelp = [
+  "send",
+  "clear draft",
+  "delete last word",
+  "echo on / echo off",
+  "auto send on / auto send off",
+  "read draft",
+  "append ...",
+  "prepend ...",
+  "replace with ...",
+  "combine commands with comma, then, or and",
+];
 
 function setState(state, label, detail = "", mode = activeCaptureMode) {
   appShell.classList.toggle("is-listening", state === "listening");
@@ -54,6 +66,11 @@ function addMessage(text, type = "system") {
   message.append(paragraph);
   feed.append(message);
   feed.scrollTop = feed.scrollHeight;
+}
+
+function showCommandHelp() {
+  addMessage(`Commands: ${commandHelp.join("; ")}.`, "system");
+  setState("idle", "Ready", "Commands listed");
 }
 
 function getDraftText() {
@@ -489,6 +506,10 @@ function parseSingleVoiceCommand(command) {
       type: "readDraft",
       commands: ["read draft", "read it back", "repeat draft"],
     },
+    {
+      type: "help",
+      commands: ["help", "list commands", "show commands", "what can i say"],
+    },
   ];
 
   for (const group of commandGroups) {
@@ -581,6 +602,10 @@ async function applySingleVoiceCommand(action) {
 
       return;
     }
+
+    case "help":
+      showCommandHelp();
+      return;
 
     case "replace":
       setDraftText(action.text);
