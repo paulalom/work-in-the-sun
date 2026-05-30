@@ -399,74 +399,102 @@ async function handleTranscriptResult(transcript, mode, readyDetail = "Transcrip
 
 async function applyVoiceCommand(commandText) {
   const command = commandText.trim();
-  const normalized = normalizeCommand(command);
 
-  if (!normalized) {
+  if (!command) {
     setState("idle", "Ready", "Local Dictate ready");
     return;
   }
 
-  if (matchesCommand(normalized, ["send", "send it", "send message", "queue", "queue it", "submit"])) {
-    await sendTranscript("command");
-    return;
-  }
+  const parts = splitCommandComposition(command);
 
-  if (
-    matchesCommand(normalized, [
-      "clear",
-      "clear draft",
-      "discard",
-      "discard draft",
-      "scratch that",
-      "delete draft",
-    ])
-  ) {
-    setDraftText("");
-    setState("idle", "Ready", "Draft cleared");
-    return;
-  }
-
-  if (matchesCommand(normalized, ["delete last word", "remove last word"])) {
-    deleteLastDraftWord();
-    setState("idle", "Ready", getDraftText() ? "Draft edited" : "Draft cleared");
-    return;
-  }
-
-  if (matchesCommand(normalized, ["echo on", "turn echo on"])) {
-    echoToggle.checked = true;
-    setState("idle", "Ready", "Echo on");
-    return;
-  }
-
-  if (matchesCommand(normalized, ["echo off", "turn echo off"])) {
-    echoToggle.checked = false;
-    setState("idle", "Ready", "Echo off");
-    return;
-  }
-
-  if (matchesCommand(normalized, ["auto send on", "turn auto send on", "autosend on"])) {
-    autoSendToggle.checked = true;
-    setState("idle", "Ready", "Auto Send on");
-    return;
-  }
-
-  if (matchesCommand(normalized, ["auto send off", "turn auto send off", "autosend off"])) {
-    autoSendToggle.checked = false;
-    setState("idle", "Ready", "Auto Send off");
-    return;
-  }
-
-  if (matchesCommand(normalized, ["read draft", "read it back", "repeat draft"])) {
-    const draft = getDraftText();
-
-    if (draft) {
-      await speak(draft);
-      setState("idle", "Ready", "Draft read");
-    } else {
-      setState("idle", "Ready", "No draft");
+  if (parts.length > 1) {
+    for (const part of parts) {
+      await applySingleVoiceCommand(parseSingleVoiceCommand(part));
     }
 
     return;
+  }
+
+  const action = parseSingleVoiceCommand(command);
+
+  if (action) {
+    await applySingleVoiceCommand(action);
+    return;
+  }
+
+  addMessage(`Command not recognized: ${command}`, "warning");
+  setState("idle", "Ready", "Command not recognized");
+}
+
+function splitCommandComposition(command) {
+  const hardParts = splitCommandParts(command, /\s*(?:[,;]|\band then\b|\bthen\b)\s*/i);
+
+  if (hardParts.length > 1 && hardParts.every((part) => parseSingleVoiceCommand(part))) {
+    return hardParts;
+  }
+
+  const andParts = splitCommandParts(command, /\s+\band\b\s+/i);
+
+  if (andParts.length > 1 && andParts.every((part) => parseSingleVoiceCommand(part))) {
+    return andParts;
+  }
+
+  return [command];
+}
+
+function splitCommandParts(command, separator) {
+  return command
+    .split(separator)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function parseSingleVoiceCommand(command) {
+  const normalized = normalizeCommand(command);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const commandGroups = [
+    {
+      type: "send",
+      commands: ["send", "send it", "send message", "queue", "queue it", "submit"],
+    },
+    {
+      type: "clear",
+      commands: ["clear", "clear draft", "discard", "discard draft", "scratch that", "delete draft"],
+    },
+    {
+      type: "deleteLastWord",
+      commands: ["delete last word", "remove last word"],
+    },
+    {
+      type: "echoOn",
+      commands: ["echo on", "turn echo on"],
+    },
+    {
+      type: "echoOff",
+      commands: ["echo off", "turn echo off"],
+    },
+    {
+      type: "autoSendOn",
+      commands: ["auto send on", "turn auto send on", "autosend on"],
+    },
+    {
+      type: "autoSendOff",
+      commands: ["auto send off", "turn auto send off", "autosend off"],
+    },
+    {
+      type: "readDraft",
+      commands: ["read draft", "read it back", "repeat draft"],
+    },
+  ];
+
+  for (const group of commandGroups) {
+    if (matchesCommand(normalized, group.commands)) {
+      return { type: group.type };
+    }
   }
 
   const replacement = commandRemainder(command, [
@@ -480,9 +508,7 @@ async function applyVoiceCommand(commandText) {
   ]);
 
   if (replacement !== null) {
-    setDraftText(replacement);
-    setState("idle", "Ready", "Draft replaced");
-    return;
+    return { type: "replace", text: replacement };
   }
 
   const appendText = commandRemainder(command, [
@@ -495,21 +521,85 @@ async function applyVoiceCommand(commandText) {
   ]);
 
   if (appendText !== null) {
-    appendDraftText(appendText);
-    setState("idle", "Ready", "Draft edited");
-    return;
+    return { type: "append", text: appendText };
   }
 
   const prependText = commandRemainder(command, ["prepend", "start with", "put before"]);
 
   if (prependText !== null) {
-    prependDraftText(prependText);
-    setState("idle", "Ready", "Draft edited");
-    return;
+    return { type: "prepend", text: prependText };
   }
 
-  addMessage(`Command not recognized: ${command}`, "warning");
-  setState("idle", "Ready", "Command not recognized");
+  return null;
+}
+
+async function applySingleVoiceCommand(action) {
+  switch (action.type) {
+    case "send":
+      await sendTranscript("command");
+      return;
+
+    case "clear":
+      setDraftText("");
+      setState("idle", "Ready", "Draft cleared");
+      return;
+
+    case "deleteLastWord":
+      deleteLastDraftWord();
+      setState("idle", "Ready", getDraftText() ? "Draft edited" : "Draft cleared");
+      return;
+
+    case "echoOn":
+      echoToggle.checked = true;
+      setState("idle", "Ready", "Echo on");
+      return;
+
+    case "echoOff":
+      echoToggle.checked = false;
+      setState("idle", "Ready", "Echo off");
+      return;
+
+    case "autoSendOn":
+      autoSendToggle.checked = true;
+      setState("idle", "Ready", "Auto Send on");
+      return;
+
+    case "autoSendOff":
+      autoSendToggle.checked = false;
+      setState("idle", "Ready", "Auto Send off");
+      return;
+
+    case "readDraft": {
+      const draft = getDraftText();
+
+      if (draft) {
+        await speak(draft);
+        setState("idle", "Ready", "Draft read");
+      } else {
+        setState("idle", "Ready", "No draft");
+      }
+
+      return;
+    }
+
+    case "replace":
+      setDraftText(action.text);
+      setState("idle", "Ready", "Draft replaced");
+      return;
+
+    case "append":
+      appendDraftText(action.text);
+      setState("idle", "Ready", "Draft edited");
+      return;
+
+    case "prepend":
+      prependDraftText(action.text);
+      setState("idle", "Ready", "Draft edited");
+      return;
+
+    default:
+      return;
+  }
 }
 
 function normalizeCommand(command) {
