@@ -18,6 +18,7 @@ const api = {
   sendCommand: "/api/agent/commands",
   target: "/api/agent/target",
   events: "/api/agent/events",
+  catalog: "/api/agent/catalog",
 };
 
 let mediaRecorder = null;
@@ -40,6 +41,7 @@ let audioStopToken = 0;
 let speechUnlocked = false;
 let responseAudioQueue = Promise.resolve();
 let agentEventCursor = 0;
+let activeListContext = null;
 
 const BrowserSpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition || null;
@@ -52,6 +54,9 @@ const commandHelp = [
   "echo on / echo off",
   "auto send on / auto send off",
   "responses on / responses off",
+  "list",
+  "list projects / list chats",
+  "continue",
   "use codex work in the sun agent chat",
   "use codex work in the sun new",
   "stop audio",
@@ -365,6 +370,96 @@ async function pollAgentEvents() {
 function startAgentEventPolling() {
   pollAgentEvents();
   window.setInterval(pollAgentEvents, 2400);
+}
+
+function promptListKind() {
+  activeListContext = { kind: "choices" };
+  announceCommand("Would you like to list projects or chats?", "Choose projects or chats");
+}
+
+function listLabels(items, key = "label") {
+  return items.map((item) => item[key]).filter(Boolean).join("; ");
+}
+
+async function fetchCatalog(kind, options = {}) {
+  const params = new URLSearchParams();
+
+  if (options.after !== undefined) {
+    params.set("after", String(options.after));
+  }
+
+  if (options.limit !== undefined) {
+    params.set("limit", String(options.limit));
+  }
+
+  const suffix = params.toString() ? `?${params}` : "";
+  const response = await fetch(`${api.catalog}/${kind}${suffix}`);
+
+  if (!response.ok) {
+    throw new Error("Could not load the Codex list.");
+  }
+
+  return response.json();
+}
+
+async function listProjects() {
+  activeListContext = null;
+  setState("processing", "Listing", "Loading Codex projects");
+
+  try {
+    const result = await fetchCatalog("projects", { limit: 25 });
+    const names = listLabels(result.projects || []);
+
+    if (!names) {
+      announceCommand("No Codex projects found.", "No projects found");
+      return;
+    }
+
+    addMessage(`Projects: ${names}.`, "system");
+    setState("idle", "Ready", `${result.total || 0} projects listed`);
+  } catch (error) {
+    addMessage(error.message || "Could not load Codex projects.", "warning");
+    setState("idle", "Ready", "Project list unavailable");
+  }
+}
+
+function formatChat(chat, index, start) {
+  const number = start + index + 1;
+  const project = chat.projectLabel ? ` (${chat.projectLabel})` : "";
+  return `${number}. ${chat.label}${project}`;
+}
+
+async function listChats(after = 0) {
+  setState("processing", "Listing", "Loading Codex chats");
+
+  try {
+    const result = await fetchCatalog("chats", { after, limit: 5 });
+    const chats = result.chats || [];
+
+    if (!chats.length) {
+      activeListContext = null;
+      announceCommand("No more Codex chats found.", "No more chats");
+      return;
+    }
+
+    const chatText = chats.map((chat, index) => formatChat(chat, index, after)).join("; ");
+    const hasMore = result.cursor < result.total;
+    activeListContext = hasMore ? { kind: "chats", cursor: result.cursor } : null;
+    addMessage(`Chats: ${chatText}.${hasMore ? " Say continue for more." : ""}`, "system");
+    setState("idle", "Ready", hasMore ? "Say continue for more" : "Chats listed");
+  } catch (error) {
+    addMessage(error.message || "Could not load Codex chats.", "warning");
+    setState("idle", "Ready", "Chat list unavailable");
+  }
+}
+
+async function continueList() {
+  if (activeListContext?.kind === "chats") {
+    await listChats(activeListContext.cursor);
+    return;
+  }
+
+  promptListKind();
 }
 
 async function setInitialSpeechMode() {
@@ -727,6 +822,28 @@ function parseSingleVoiceCommand(command) {
     return { type: "setAgentTarget", target: agentTarget };
   }
 
+  if (matchesCommand(normalized, ["list", "show list", "what can i list"])) {
+    return { type: "listPrompt" };
+  }
+
+  if (
+    matchesCommand(normalized, ["list projects", "show projects"]) ||
+    (activeListContext?.kind === "choices" && matchesCommand(normalized, ["projects", "project"]))
+  ) {
+    return { type: "listProjects" };
+  }
+
+  if (
+    matchesCommand(normalized, ["list chats", "show chats", "list conversations", "show conversations"]) ||
+    (activeListContext?.kind === "choices" && matchesCommand(normalized, ["chats", "chat", "conversations"]))
+  ) {
+    return { type: "listChats" };
+  }
+
+  if (matchesCommand(normalized, ["continue", "more", "next", "next page"])) {
+    return { type: "continueList" };
+  }
+
   const commandGroups = [
     {
       type: "send",
@@ -888,6 +1005,22 @@ async function applySingleVoiceCommand(action) {
 
     case "setAgentTarget":
       await setAgentTarget(action.target);
+      return;
+
+    case "listPrompt":
+      promptListKind();
+      return;
+
+    case "listProjects":
+      await listProjects();
+      return;
+
+    case "listChats":
+      await listChats(0);
+      return;
+
+    case "continueList":
+      await continueList();
       return;
 
     case "stopAudio":

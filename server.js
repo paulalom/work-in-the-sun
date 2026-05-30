@@ -6,6 +6,7 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 const agentStore = require("./lib/agent-store");
+const codexCatalog = require("./lib/codex-catalog");
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 4173);
@@ -477,6 +478,35 @@ async function postAgentEvent(request, response) {
   }
 }
 
+async function listAgentCatalog(response, url, kind) {
+  const options = {
+    after: url.searchParams.get("after"),
+    limit: url.searchParams.get("limit"),
+  };
+
+  if (kind === "projects") {
+    const result = await codexCatalog.listProjects(options);
+    json(response, 200, {
+      provider: "codex",
+      kind,
+      ...result,
+    });
+    return;
+  }
+
+  if (kind === "chats") {
+    const result = await codexCatalog.listChats(options);
+    json(response, 200, {
+      provider: "codex",
+      kind,
+      ...result,
+    });
+    return;
+  }
+
+  json(response, 404, { error: "Unknown catalog kind." });
+}
+
 async function serveStatic(request, response, pathname) {
   const relativePath = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
   const filePath = path.resolve(APP_DIR, relativePath);
@@ -565,6 +595,12 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/agent/events") {
       await postAgentEvent(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/agent/catalog/")) {
+      const kind = url.pathname.slice("/api/agent/catalog/".length);
+      await listAgentCatalog(response, url, kind);
       return;
     }
 

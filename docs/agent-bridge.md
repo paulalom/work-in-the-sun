@@ -42,6 +42,17 @@ Hold the command button and say:
 
 The app does not need to know how to open or attach to that session. It only records the target. The desktop agent bridge resolves the phrase to a real session, creates one when `mode` is `new`, and may send feedback if the target is ambiguous.
 
+## Voice Catalog Commands
+
+Hold the command button and say:
+
+- `list`
+- `list projects`
+- `list chats`
+- `continue`
+
+`list` asks whether to list projects or chats. `list projects` reads Codex desktop project roots. `list chats` reads recent Codex chats in pages of five, ordered by last use. `continue` reads the next page of chats when more are available.
+
 ## Command Envelope
 
 Commands are queued as JSON Lines:
