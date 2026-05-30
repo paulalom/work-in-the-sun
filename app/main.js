@@ -28,6 +28,12 @@ let activeRecognition = null;
 let recognitionTranscript = "";
 let activeUtterance = null;
 let audioContext = null;
+let activeAudioSource = null;
+let activeAudioElement = null;
+let activeAudioUrl = null;
+let activeAudioFinish = null;
+let activeSpeechFinish = null;
+let audioStopToken = 0;
 let speechUnlocked = false;
 let responseAudioQueue = Promise.resolve();
 
@@ -42,6 +48,7 @@ const commandHelp = [
   "echo on / echo off",
   "auto send on / auto send off",
   "responses on / responses off",
+  "stop audio",
   "read draft",
   "append ...",
   "prepend ...",
@@ -85,6 +92,7 @@ function showCommandHelp() {
 
 function queueResponseAudio(text) {
   const response = text.trim();
+  const stopToken = audioStopToken;
 
   if (!response) {
     return;
@@ -93,6 +101,10 @@ function queueResponseAudio(text) {
   responseAudioQueue = responseAudioQueue
     .catch(() => {})
     .then(() => {
+      if (stopToken !== audioStopToken) {
+        return "stopped";
+      }
+
       if (!responseAudioToggle.checked) {
         return "skipped";
       }
@@ -109,6 +121,59 @@ function queueResponseAudio(text) {
 function announceCommand(message, detail = message.replace(/\.$/, "")) {
   addMessage(message, "system");
   setState("idle", "Ready", detail);
+}
+
+function stopAudioPlayback({ announce = true } = {}) {
+  audioStopToken += 1;
+  responseAudioQueue = Promise.resolve();
+
+  if (activeSpeechFinish) {
+    activeSpeechFinish("stopped");
+  }
+
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
+
+  activeUtterance = null;
+
+  if (activeAudioSource) {
+    try {
+      activeAudioSource.stop(0);
+    } catch {
+      // Already stopped.
+    }
+
+    try {
+      activeAudioSource.disconnect();
+    } catch {
+      // Already disconnected.
+    }
+
+    activeAudioSource = null;
+  }
+
+  if (activeAudioElement) {
+    activeAudioElement.pause();
+    activeAudioElement.removeAttribute("src");
+    activeAudioElement.load();
+    activeAudioElement = null;
+  }
+
+  if (activeAudioFinish) {
+    activeAudioFinish("stopped");
+  }
+
+  if (activeAudioUrl) {
+    URL.revokeObjectURL(activeAudioUrl);
+    activeAudioUrl = null;
+  }
+
+  setState("idle", "Ready", "Audio stopped");
+
+  if (announce) {
+    addMessage("Audio stopped.", "system", { speak: false });
+  }
 }
 
 function announceDraftState(detail = "Draft edited") {
@@ -583,6 +648,20 @@ function parseSingleVoiceCommand(command) {
       ],
     },
     {
+      type: "stopAudio",
+      commands: [
+        "stop",
+        "stop audio",
+        "stop speaking",
+        "stop reading",
+        "stop readback",
+        "stop read back",
+        "stop talking",
+        "silence",
+        "quiet",
+      ],
+    },
+    {
       type: "readDraft",
       commands: ["read draft", "read it back", "repeat draft"],
     },
@@ -676,6 +755,10 @@ async function applySingleVoiceCommand(action) {
 
     case "responsesOff":
       setResponseAudio(false);
+      return;
+
+    case "stopAudio":
+      stopAudioPlayback();
       return;
 
     case "readDraft": {
@@ -775,25 +858,36 @@ function waitForVoices() {
 }
 
 async function speak(text, label = "Echo", detail = "Reading transcript") {
+  const stopToken = audioStopToken;
+
   if (prefersServerTts) {
-    return speakWithServer(text, label, detail);
+    return speakWithServer(text, label, detail, stopToken);
   }
 
-  const browserSpoken = await speakWithBrowser(text, label, detail);
+  const browserSpoken = await speakWithBrowser(text, label, detail, stopToken);
 
-  if (browserSpoken) {
+  if (browserSpoken === true) {
     return true;
   }
 
-  return speakWithServer(text, label, detail);
+  if (browserSpoken === "stopped") {
+    return "stopped";
+  }
+
+  return speakWithServer(text, label, detail, stopToken);
 }
 
-async function speakWithBrowser(text, label, detail) {
+async function speakWithBrowser(text, label, detail, stopToken) {
   await waitForVoices();
 
   return new Promise((resolve) => {
     if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
       resolve(false);
+      return;
+    }
+
+    if (stopToken !== audioStopToken) {
+      resolve("stopped");
       return;
     }
 
@@ -807,16 +901,23 @@ async function speakWithBrowser(text, label, detail) {
     utterance.volume = 1;
 
     const timeout = window.setTimeout(() => {
-      activeUtterance = null;
-      resolve(false);
+      finish(false);
     }, Math.max(3500, Math.min(12000, text.length * 70)));
 
-    function finish(success) {
+    function finish(result) {
       window.clearTimeout(timeout);
-      activeUtterance = null;
-      resolve(success);
+      if (activeUtterance === utterance) {
+        activeUtterance = null;
+      }
+
+      if (activeSpeechFinish === finish) {
+        activeSpeechFinish = null;
+      }
+
+      resolve(result);
     }
 
+    activeSpeechFinish = finish;
     utterance.addEventListener("start", () => {
       setState("speaking", label, detail);
     });
@@ -826,27 +927,38 @@ async function speakWithBrowser(text, label, detail) {
   });
 }
 
-async function speakWithServer(text, label, detail) {
+async function speakWithServer(text, label, detail, stopToken) {
   try {
+    if (stopToken !== audioStopToken) {
+      return "stopped";
+    }
+
     const response = await fetch(api.synthesize, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
 
+    if (stopToken !== audioStopToken) {
+      return "stopped";
+    }
+
     if (!response.ok) {
       return false;
     }
 
     const audio = await response.arrayBuffer();
-    await playAudioBuffer(audio, label, detail);
-    return true;
+    return playAudioBuffer(audio, label, detail, stopToken);
   } catch {
     return false;
   }
 }
 
-async function playAudioBuffer(audio, label, detail) {
+async function playAudioBuffer(audio, label, detail, stopToken) {
+  if (stopToken !== audioStopToken) {
+    return "stopped";
+  }
+
   if (audioContext) {
     if (audioContext.state === "suspended") {
       await audioContext.resume();
@@ -854,30 +966,102 @@ async function playAudioBuffer(audio, label, detail) {
 
     const decoded = await audioContext.decodeAudioData(audio.slice(0));
 
-    await new Promise((resolve) => {
+    if (stopToken !== audioStopToken) {
+      return "stopped";
+    }
+
+    return new Promise((resolve) => {
       const source = audioContext.createBufferSource();
+      let settled = false;
+
+      function finish(result) {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+
+        if (activeAudioSource === source) {
+          activeAudioSource = null;
+        }
+
+        if (activeAudioFinish === finish) {
+          activeAudioFinish = null;
+        }
+
+        resolve(result);
+      }
+
       source.buffer = decoded;
       source.connect(audioContext.destination);
-      source.addEventListener("ended", resolve, { once: true });
-      setState("speaking", label, detail);
-      source.start();
-    });
+      activeAudioSource = source;
+      activeAudioFinish = finish;
+      source.addEventListener("ended", () => finish(true), { once: true });
 
-    return;
+      if (stopToken !== audioStopToken) {
+        finish("stopped");
+        return;
+      }
+
+      setState("speaking", label, detail);
+      try {
+        source.start();
+      } catch {
+        finish(false);
+      }
+    });
   }
 
   const blob = new Blob([audio], { type: "audio/wav" });
   const url = URL.createObjectURL(blob);
   const player = new Audio(url);
 
-  await new Promise((resolve, reject) => {
+  activeAudioElement = player;
+  activeAudioUrl = url;
+
+  return new Promise((resolve) => {
+    let settled = false;
+
+    function finish(result) {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+
+      if (activeAudioElement === player) {
+        activeAudioElement = null;
+      }
+
+      if (activeAudioFinish === finish) {
+        activeAudioFinish = null;
+      }
+
+      if (activeAudioUrl === url) {
+        URL.revokeObjectURL(url);
+        activeAudioUrl = null;
+      }
+
+      resolve(result);
+    }
+
     player.addEventListener("playing", () => setState("speaking", label, detail), {
       once: true,
     });
-    player.addEventListener("ended", resolve, { once: true });
-    player.addEventListener("error", reject, { once: true });
-    player.play().catch(reject);
-  }).finally(() => URL.revokeObjectURL(url));
+    player.addEventListener("ended", () => finish(true), { once: true });
+    player.addEventListener("error", () => finish(false), { once: true });
+
+    activeAudioFinish = finish;
+
+    if (stopToken !== audioStopToken) {
+      finish("stopped");
+      return;
+    }
+
+    player.play().catch(() => {
+      finish(false);
+    });
+  });
 }
 
 async function sendTranscript(source = "manual") {
