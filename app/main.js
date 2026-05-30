@@ -94,16 +94,33 @@ function queueResponseAudio(text) {
     .catch(() => {})
     .then(() => {
       if (!responseAudioToggle.checked) {
-        return false;
+        return "skipped";
       }
 
       return speak(response, "Response", "Reading response");
     })
     .then((spoken) => {
-      if (!spoken) {
+      if (spoken === false) {
         setState("idle", "Ready", "Response audio unavailable");
       }
     });
+}
+
+function announceCommand(message, detail = message.replace(/\.$/, "")) {
+  addMessage(message, "system");
+  setState("idle", "Ready", detail);
+}
+
+function announceDraftState(detail = "Draft edited") {
+  const draft = getDraftText();
+
+  if (!draft) {
+    announceCommand("Draft cleared.");
+    return;
+  }
+
+  addMessage(`Draft: ${draft}`, "system");
+  setState("idle", "Ready", detail);
 }
 
 function setResponseAudio(enabled, { announce = true } = {}) {
@@ -625,32 +642,32 @@ async function applySingleVoiceCommand(action) {
 
     case "clear":
       setDraftText("");
-      setState("idle", "Ready", "Draft cleared");
+      announceCommand("Draft cleared.");
       return;
 
     case "deleteLastWord":
       deleteLastDraftWord();
-      setState("idle", "Ready", getDraftText() ? "Draft edited" : "Draft cleared");
+      announceDraftState();
       return;
 
     case "echoOn":
       echoToggle.checked = true;
-      setState("idle", "Ready", "Echo on");
+      announceCommand("Echo on.");
       return;
 
     case "echoOff":
       echoToggle.checked = false;
-      setState("idle", "Ready", "Echo off");
+      announceCommand("Echo off.");
       return;
 
     case "autoSendOn":
       autoSendToggle.checked = true;
-      setState("idle", "Ready", "Auto Send on");
+      announceCommand("Auto Send on.");
       return;
 
     case "autoSendOff":
       autoSendToggle.checked = false;
-      setState("idle", "Ready", "Auto Send off");
+      announceCommand("Auto Send off.");
       return;
 
     case "responsesOn":
@@ -665,10 +682,11 @@ async function applySingleVoiceCommand(action) {
       const draft = getDraftText();
 
       if (draft) {
+        addMessage("Reading draft.", "system", { speak: false });
         await speak(draft);
         setState("idle", "Ready", "Draft read");
       } else {
-        setState("idle", "Ready", "No draft");
+        announceCommand("No draft.");
       }
 
       return;
@@ -680,17 +698,17 @@ async function applySingleVoiceCommand(action) {
 
     case "replace":
       setDraftText(action.text);
-      setState("idle", "Ready", "Draft replaced");
+      announceDraftState("Draft replaced");
       return;
 
     case "append":
       appendDraftText(action.text);
-      setState("idle", "Ready", "Draft edited");
+      announceDraftState("Draft edited");
       return;
 
     case "prepend":
       prependDraftText(action.text);
-      setState("idle", "Ready", "Draft edited");
+      announceDraftState("Draft edited");
       return;
 
     default:
@@ -866,6 +884,7 @@ async function sendTranscript(source = "manual") {
   const text = getDraftText();
 
   if (!text) {
+    addMessage("No draft.", "system");
     setState("idle", "Ready", "No draft");
     return;
   }
