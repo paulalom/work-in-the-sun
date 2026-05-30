@@ -42,6 +42,7 @@ let speechUnlocked = false;
 let responseAudioQueue = Promise.resolve();
 let agentEventCursor = 0;
 let activeListContext = null;
+let lastListedChats = [];
 
 const BrowserSpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition || null;
@@ -59,6 +60,7 @@ const commandHelp = [
   "list work in the sun",
   "list chats in work in the sun",
   "continue",
+  "use listed one",
   "use codex work in the sun agent chat",
   "use codex work in the sun new",
   "stop audio",
@@ -318,6 +320,60 @@ function parseAgentTargetCommand(command) {
   };
 }
 
+function parseSpokenNumber(text) {
+  const normalized = normalizeCommand(text);
+  const words = new Map([
+    ["one", 1],
+    ["first", 1],
+    ["two", 2],
+    ["second", 2],
+    ["to", 2],
+    ["too", 2],
+    ["three", 3],
+    ["third", 3],
+    ["four", 4],
+    ["fourth", 4],
+    ["for", 4],
+    ["five", 5],
+    ["fifth", 5],
+    ["six", 6],
+    ["sixth", 6],
+    ["seven", 7],
+    ["seventh", 7],
+    ["eight", 8],
+    ["eighth", 8],
+    ["ate", 8],
+    ["nine", 9],
+    ["ninth", 9],
+    ["ten", 10],
+    ["tenth", 10],
+  ]);
+
+  if (/^\d+$/.test(normalized)) {
+    return Number(normalized);
+  }
+
+  return words.get(normalized) || null;
+}
+
+function parseUseListedCommand(command) {
+  const value = commandRemainder(command, [
+    "use listed chat",
+    "use listed",
+    "use list",
+    "use number",
+    "select listed chat",
+    "select listed",
+    "select number",
+  ]);
+
+  if (value === null) {
+    return null;
+  }
+
+  return parseSpokenNumber(value);
+}
+
 function parseProjectChatListCommand(command) {
   const project = commandRemainder(command, [
     "list chats in",
@@ -446,6 +502,7 @@ async function fetchCatalog(kind, options = {}) {
 
 async function listProjects() {
   activeListContext = null;
+  lastListedChats = [];
   setState("processing", "Listing", "Loading Codex projects");
 
   try {
@@ -467,8 +524,41 @@ async function listProjects() {
 
 function formatChat(chat, index, start) {
   const number = start + index + 1;
-  const project = chat.projectLabel ? ` (${chat.projectLabel})` : "";
-  return `${number}. ${chat.label}${project}`;
+  const prefix = chat.projectLabel ? `${chat.projectLabel}: ` : "";
+  return `${number}. ${prefix}${chat.label}`;
+}
+
+function listedChatTarget(item) {
+  const chat = item.chat;
+  const project = chat.projectLabel || "";
+
+  return {
+    id: `codex:${chat.id}`,
+    provider: "codex",
+    label: project ? `${project} / ${chat.label}` : `Codex / ${chat.label}`,
+    workspace: chat.workspace || "",
+    sessionHint: chat.id,
+    mode: "existing",
+    route: chat.label,
+  };
+}
+
+async function useListedChat(number) {
+  if (!number) {
+    addMessage("Which listed chat should I use?", "warning");
+    setState("idle", "Ready", "Say use listed one");
+    return;
+  }
+
+  const item = lastListedChats.find((listed) => listed.number === number || listed.position === number);
+
+  if (!item) {
+    addMessage("That listed chat is not on the current page.", "warning");
+    setState("idle", "Ready", "Listed chat not found");
+    return;
+  }
+
+  await setAgentTarget(listedChatTarget(item));
 }
 
 async function listChats(after = 0, project = "") {
@@ -483,6 +573,7 @@ async function listChats(after = 0, project = "") {
 
     if (result.projectMissing) {
       activeListContext = { kind: "choices" };
+      lastListedChats = [];
       addMessage(`No Codex project matched ${scoped}.`, "warning");
       setState("idle", "Ready", "Project not found");
       return;
@@ -490,6 +581,7 @@ async function listChats(after = 0, project = "") {
 
     if (!chats.length) {
       activeListContext = null;
+      lastListedChats = [];
       announceCommand(
         projectLabel ? `No Codex chats found in ${projectLabel}.` : "No more Codex chats found.",
         "No more chats",
@@ -500,6 +592,11 @@ async function listChats(after = 0, project = "") {
     const chatText = chats.map((chat, index) => formatChat(chat, index, after)).join("; ");
     const hasMore = result.cursor < result.total;
     activeListContext = hasMore ? { kind: "chats", cursor: result.cursor, project: scoped } : null;
+    lastListedChats = chats.map((chat, index) => ({
+      chat,
+      number: after + index + 1,
+      position: index + 1,
+    }));
     const label = projectLabel ? `Chats in ${projectLabel}` : "Chats";
     addMessage(`${label}: ${chatText}.${hasMore ? " Say continue for more." : ""}`, "system");
     setState("idle", "Ready", hasMore ? "Say continue for more" : "Chats listed");
@@ -872,6 +969,12 @@ function parseSingleVoiceCommand(command) {
     return null;
   }
 
+  const listedChatNumber = parseUseListedCommand(command);
+
+  if (listedChatNumber !== null) {
+    return { type: "useListedChat", number: listedChatNumber };
+  }
+
   const agentTarget = parseAgentTargetCommand(command);
 
   if (agentTarget) {
@@ -1067,6 +1170,10 @@ async function applySingleVoiceCommand(action) {
 
     case "setAgentTarget":
       await setAgentTarget(action.target);
+      return;
+
+    case "useListedChat":
+      await useListedChat(action.number);
       return;
 
     case "listPrompt":
