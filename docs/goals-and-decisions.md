@@ -22,12 +22,16 @@ Enable a developer to take a phone somewhere like a park and continue working on
 - Tailscale is the MVP tunnel layer.
 - Build the phone UI first, with push-to-talk and echo mode as the primary loop.
 - Send short audio captures to a desktop Local Dictate backend first; defer phone-local transcription.
-- The remote interface should expose a narrow set of actions: send instructions, view progress, review output, approve risky steps, and stop work.
+- The remote interface should expose a narrow set of actions: send instructions, choose the target agent/session, view progress, review output, approve risky steps, and stop work.
+- Treat Codex as one supported agent target, not as the app protocol. Commands should be generic natural-language instructions routed to the selected desktop agent.
+- Desktop application control, such as opening apps, switching focus, and clicking buttons, should be expressed as instructions to the agent rather than implemented directly in the phone UI.
+- Agents should report progress back through a local MCP server so the app can stay generic across Codex and other agent software.
 - Security must include strong authentication, easy revocation, and a clear way to shut down remote access.
 
 ## Open Questions
 
-- What desktop agent or local API should Codex talk through?
+- What desktop agent bridge should consume `.local/agent-commands.jsonl` first?
+- How should fuzzy target phrases map to durable chat/session ids for each agent?
 - How should device trust, login, and session expiry work?
 - What phone-specific controls are needed beyond dictation and chat?
 - When, if ever, is a standalone phone app worth the added complexity?

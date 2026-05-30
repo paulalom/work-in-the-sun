@@ -23,6 +23,7 @@ The core idea is simple: keep the serious compute, credentials, editor state, an
 ## Docs
 
 - [Goals and Decisions](docs/goals-and-decisions.md)
+- [Agent Bridge](docs/agent-bridge.md)
 
 ## UI Prototype
 
@@ -40,8 +41,12 @@ npm run dev
 
 The backend also needs `ffmpeg` on `PATH`, or `FFMPEG_PATH` set. For phone testing, serve it over Tailscale HTTPS so browser audio capture is allowed.
 
-Sent transcripts are queued locally in `.local/codex-messages.jsonl` until the Codex command runner exists.
+Sent transcripts are queued locally in `.local/agent-commands.jsonl` for a desktop agent or router to consume. Agents can send progress back through the local MCP server:
+
+```powershell
+npm run mcp
+```
 
 ## Status
 
-Project initialized. Architecture and implementation details are intentionally open while the safest, simplest workflow is designed.
+Project initialized. The current prototype has speech input, a generic agent command inbox, configurable active agent target, and an MCP feedback path.

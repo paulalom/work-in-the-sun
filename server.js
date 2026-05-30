@@ -5,12 +5,11 @@ const fsp = require("fs/promises");
 const http = require("http");
 const os = require("os");
 const path = require("path");
+const agentStore = require("./lib/agent-store");
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 4173);
 const APP_DIR = path.join(__dirname, "app");
-const LOCAL_DIR = path.join(__dirname, ".local");
-const CODEX_INBOX_PATH = process.env.CODEX_INBOX_PATH || path.join(LOCAL_DIR, "codex-messages.jsonl");
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_JSON_BYTES = 64 * 1024;
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
@@ -399,35 +398,83 @@ async function synthesize(request, response) {
   }
 }
 
-async function queueCodexMessage(request, response) {
+async function getAgentTarget(response) {
+  const target = await agentStore.getActiveTarget();
+  json(response, 200, { target });
+}
+
+async function updateAgentTarget(request, response) {
   const body = await readJson(request, MAX_JSON_BYTES);
-  const text = String(body.text || "").trim();
+  const target = await agentStore.setActiveTarget(body.target || body);
+  json(response, 200, { target });
+}
 
-  if (!text) {
-    json(response, 400, { error: "Missing message text." });
-    return;
+async function queueAgentCommand(request, response) {
+  const body = await readJson(request, MAX_JSON_BYTES);
+
+  try {
+    const command = await agentStore.appendCommand({
+      text: body.text,
+      input: body.input,
+      source: body.source,
+      echo: body.echo,
+      target: body.target,
+    });
+
+    json(response, 202, {
+      command: {
+        id: command.id,
+        status: command.status,
+        receivedAt: command.receivedAt,
+        target: command.target,
+      },
+      message: {
+        id: command.id,
+        status: command.status,
+        receivedAt: command.receivedAt,
+        target: command.target,
+      },
+    });
+  } catch (error) {
+    json(response, 400, { error: error.message || "Unable to queue command." });
   }
+}
 
-  const message = {
-    id: crypto.randomUUID(),
-    receivedAt: new Date().toISOString(),
-    status: "queued",
-    input: body.input === "voice" ? "voice" : "text",
-    source: ["manual", "auto", "command"].includes(body.source) ? body.source : "manual",
-    echo: Boolean(body.echo),
-    text,
-  };
-
-  await fsp.mkdir(path.dirname(CODEX_INBOX_PATH), { recursive: true });
-  await fsp.appendFile(CODEX_INBOX_PATH, `${JSON.stringify(message)}\n`, "utf8");
-
-  json(response, 202, {
-    message: {
-      id: message.id,
-      status: message.status,
-      receivedAt: message.receivedAt,
-    },
+async function listAgentCommands(request, response, url) {
+  const result = await agentStore.readCommands({
+    after: url.searchParams.get("after"),
+    limit: url.searchParams.get("limit"),
   });
+
+  json(response, 200, {
+    cursor: result.cursor,
+    total: result.total,
+    commands: result.records,
+  });
+}
+
+async function listAgentEvents(request, response, url) {
+  const result = await agentStore.readEvents({
+    after: url.searchParams.get("after"),
+    limit: url.searchParams.get("limit"),
+  });
+
+  json(response, 200, {
+    cursor: result.cursor,
+    total: result.total,
+    events: result.records,
+  });
+}
+
+async function postAgentEvent(request, response) {
+  const body = await readJson(request, MAX_JSON_BYTES);
+
+  try {
+    const event = await agentStore.appendEvent(body);
+    json(response, 202, { event });
+  } catch (error) {
+    json(response, 400, { error: error.message || "Unable to record event." });
+  }
 }
 
 async function serveStatic(request, response, pathname) {
@@ -460,6 +507,7 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/health") {
       const speech = await speechHealth();
+      const activeTarget = await agentStore.getActiveTarget();
       json(response, speech.available ? 200 : 503, {
         speech: {
           available: speech.available,
@@ -470,6 +518,11 @@ const server = http.createServer(async (request, response) => {
         tts: {
           available: process.platform === "win32",
           engine: process.platform === "win32" ? "windows-system-speech" : null,
+        },
+        agent: {
+          activeTarget,
+          commandsPath: agentStore.paths.commands,
+          eventsPath: agentStore.paths.events,
         },
       });
       return;
@@ -485,8 +538,38 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/agent/target") {
+      await getAgentTarget(response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/agent/target") {
+      await updateAgentTarget(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/agent/commands") {
+      await listAgentCommands(request, response, url);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/agent/commands") {
+      await queueAgentCommand(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/agent/events") {
+      await listAgentEvents(request, response, url);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/agent/events") {
+      await postAgentEvent(request, response);
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/codex/messages") {
-      await queueCodexMessage(request, response);
+      await queueAgentCommand(request, response);
       return;
     }
 

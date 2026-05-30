@@ -10,11 +10,14 @@ const responseAudioToggle = document.querySelector("#responseAudioToggle");
 const draftText = document.querySelector("#draftText");
 const feed = document.querySelector(".feed");
 const desktopStatus = document.querySelector("#desktopStatus");
+const agentTargetLabel = document.querySelector("#agentTargetLabel");
 
 const api = {
   transcribe: "/api/speech/transcribe",
   synthesize: "/api/speech/synthesize",
-  sendMessage: "/api/codex/messages",
+  sendCommand: "/api/agent/commands",
+  target: "/api/agent/target",
+  events: "/api/agent/events",
 };
 
 let mediaRecorder = null;
@@ -36,6 +39,7 @@ let activeSpeechFinish = null;
 let audioStopToken = 0;
 let speechUnlocked = false;
 let responseAudioQueue = Promise.resolve();
+let agentEventCursor = 0;
 
 const BrowserSpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition || null;
@@ -48,6 +52,8 @@ const commandHelp = [
   "echo on / echo off",
   "auto send on / auto send off",
   "responses on / responses off",
+  "use codex work in the sun agent chat",
+  "use codex work in the sun new",
   "stop audio",
   "read draft",
   "append ...",
@@ -246,6 +252,121 @@ function resizeDraft() {
   draftText.style.height = `${Math.min(draftText.scrollHeight, 88)}px`;
 }
 
+function titleCase(text) {
+  return text
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() || ""}${part.slice(1).toLowerCase()}`)
+    .join(" ");
+}
+
+function renderAgentTarget(target) {
+  if (!agentTargetLabel || !target) {
+    return;
+  }
+
+  agentTargetLabel.textContent = target.label || target.id || "Desktop agent";
+  agentTargetLabel.title = [
+    target.provider ? `Provider: ${target.provider}` : "",
+    target.workspace ? `Workspace: ${target.workspace}` : "",
+    target.sessionHint ? `Session: ${target.sessionHint}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function loadAgentTarget() {
+  try {
+    const response = await fetch(api.target);
+
+    if (!response.ok) {
+      return;
+    }
+
+    const result = await response.json();
+    renderAgentTarget(result.target);
+  } catch {
+    // The desktop backend status message already covers this case.
+  }
+}
+
+function parseAgentTargetCommand(command) {
+  const match = command.trim().match(/^use\s+([a-z0-9_-]+)\s+(.+)$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  const provider = match[1].toLowerCase();
+  const route = match[2].trim();
+  const mode = /\bnew$/i.test(route) ? "new" : "existing";
+  const sessionHint = route.replace(/\bnew$/i, "").trim() || "new";
+
+  return {
+    provider,
+    route,
+    sessionHint,
+    mode,
+    label: `${titleCase(provider)} / ${route}`,
+  };
+}
+
+async function setAgentTarget(target) {
+  setState("processing", "Routing", "Updating agent target");
+
+  try {
+    const response = await fetch(api.target, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(target),
+    });
+
+    if (!response.ok) {
+      throw new Error("Agent target could not be updated.");
+    }
+
+    const result = await response.json();
+    renderAgentTarget(result.target);
+    announceCommand(`Using ${result.target.label}.`, "Agent target updated");
+  } catch (error) {
+    addMessage(error.message || "Agent target could not be updated.", "warning");
+    setState("idle", "Ready", "Agent target unchanged");
+  }
+}
+
+function handleAgentEvent(event) {
+  const text = String(event.text || "").trim();
+
+  if (!text) {
+    return;
+  }
+
+  const isWarning = ["warning", "error"].includes(event.level);
+  const shouldSpeak = event.speak ?? responseAudioToggle.checked;
+  addMessage(text, isWarning ? "warning" : "agent", { speak: shouldSpeak });
+}
+
+async function pollAgentEvents() {
+  try {
+    const response = await fetch(`${api.events}?after=${agentEventCursor}`);
+
+    if (!response.ok) {
+      return;
+    }
+
+    const result = await response.json();
+    agentEventCursor = result.cursor ?? agentEventCursor;
+    (result.events || []).forEach(handleAgentEvent);
+  } catch {
+    // Polling is opportunistic; health checks keep the visible status honest.
+  }
+}
+
+function startAgentEventPolling() {
+  pollAgentEvents();
+  window.setInterval(pollAgentEvents, 2400);
+}
+
 async function setInitialSpeechMode() {
   if (useBrowserSpeechDemo && BrowserSpeechRecognition) {
     stateDetail.textContent = "Browser speech demo ready";
@@ -256,6 +377,8 @@ async function setInitialSpeechMode() {
   try {
     const response = await fetch("/api/health");
     const health = await response.json();
+
+    renderAgentTarget(health.agent?.activeTarget);
 
     if (response.ok && health.speech?.available) {
       desktopStatus.classList.add("is-online");
@@ -598,6 +721,12 @@ function parseSingleVoiceCommand(command) {
     return null;
   }
 
+  const agentTarget = parseAgentTargetCommand(command);
+
+  if (agentTarget) {
+    return { type: "setAgentTarget", target: agentTarget };
+  }
+
   const commandGroups = [
     {
       type: "send",
@@ -755,6 +884,10 @@ async function applySingleVoiceCommand(action) {
 
     case "responsesOff":
       setResponseAudio(false);
+      return;
+
+    case "setAgentTarget":
+      await setAgentTarget(action.target);
       return;
 
     case "stopAudio":
@@ -1077,7 +1210,7 @@ async function sendTranscript(source = "manual") {
   setState("processing", "Sending", detail);
 
   try {
-    const response = await fetch(api.sendMessage, {
+    const response = await fetch(api.sendCommand, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1093,9 +1226,12 @@ async function sendTranscript(source = "manual") {
     }
 
     const result = await response.json();
-    const status = result.message?.status === "queued" ? "Queued on desktop." : "Sent to desktop.";
+    const queued = result.command?.status === "queued" || result.message?.status === "queued";
+    const target = result.command?.target || result.message?.target;
+    const status = queued ? "Queued for agent." : "Sent to agent.";
     addMessage(text, "user");
     addMessage(status, "system");
+    renderAgentTarget(target);
     setDraftText("");
     setState("idle", "Ready", status);
   } catch (error) {
@@ -1151,6 +1287,8 @@ echoToggle.addEventListener("change", async () => {
   }
 });
 setInitialSpeechMode();
+loadAgentTarget();
+startAgentEventPolling();
 resizeDraft();
 
 window.addEventListener("pagehide", () => {

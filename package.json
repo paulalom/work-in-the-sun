@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "dev": "node server.js",
-    "check": "node --check server.js && node --check app/main.js"
+    "mcp": "node mcp-server.js",
+    "check": "node --check server.js && node --check app/main.js && node --check lib/agent-store.js && node --check mcp-server.js"
   }
 }

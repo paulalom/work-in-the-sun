@@ -55,7 +55,7 @@ textarea {
   width: min(100%, 560px);
   min-height: 100svh;
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto auto 1fr auto;
   margin: 0 auto;
   background: var(--surface);
   box-shadow: var(--shadow);
@@ -113,6 +113,27 @@ h1 {
 
 .desktop-status.is-online .status-dot {
   background: var(--accent);
+}
+
+.target-strip {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 18px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfe;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.target-strip strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stage {
@@ -243,6 +264,12 @@ h1 {
 .message-system {
   color: var(--muted);
   background: var(--surface-2);
+}
+
+.message-agent {
+  background: #eef4ff;
+  border-color: #c8d9ff;
+  color: #1d3f72;
 }
 
 .message-warning {

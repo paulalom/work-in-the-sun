@@ -11,6 +11,7 @@ Work in the Sun exists to let a developer initiate, supervise, and steer AI-assi
 - Access should use Tailscale for the MVP.
 - AI tools should operate close to the codebase on the desktop.
 - The user experience should be useful from a small screen, not merely technically possible.
+- The app should route natural-language commands to a selected desktop agent rather than become a Codex-specific command runner.
 
 ## Questions to Resolve
 
@@ -18,6 +19,7 @@ Work in the Sun exists to let a developer initiate, supervise, and steer AI-assi
 - How should authentication and device trust be handled?
 - What parts of the development loop need a phone-native interface?
 - Which AI tooling should be supported first?
+- How should target phrases like "codex work in the sun agent chat" resolve to durable agent sessions?
 
 ## Candidate Milestones
 
