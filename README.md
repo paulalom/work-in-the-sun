@@ -22,6 +22,7 @@ The core idea is simple: keep the serious compute, credentials, editor state, an
 
 ## Docs
 
+- [Setup](docs/setup.md)
 - [Goals and Decisions](docs/goals-and-decisions.md)
 - [Agent Bridge](docs/agent-bridge.md)
 
@@ -38,6 +39,8 @@ Run the desktop-hosted web app:
 ```powershell
 npm run dev
 ```
+
+The app serves both the frontend UI and backend API from one HTTP server. By default it listens on `127.0.0.1:38173`; keep the `3817x` range reserved for Work in the Sun local web surfaces so it is easy to spot in process and port listings. Override with `WITS_HTTP_PORT` or `PORT` when needed.
 
 The backend also needs `ffmpeg` on `PATH`, or `FFMPEG_PATH` set. For phone testing, serve it over Tailscale HTTPS so browser audio capture is allowed.
 
@@ -64,6 +67,8 @@ You can also set `WITS_ACCESS_PIN` or point `WITS_PIN_PATH` at another local fil
 
 The unlock key is saved at `.local/pin-unlock-key.json`, and the backend prints its public fingerprint at startup. The browser remembers that fingerprint after a successful unlock and refuses future PIN entry if it changes. For remote use, still load the app over Tailscale HTTPS; application-layer PIN encryption protects the PIN payload, but HTTPS is what prevents a first-load attacker from rewriting the web app itself.
 
+The PIN dialog's server identity detail shows the app version, the host the browser connected to, and the unlock-key fingerprint. It does not expose the OS machine hostname before authentication.
+
 If three PIN attempts fail, the backend writes `.local/pin-lockout.json` and exits. The startup service will not restart while that marker exists. Clear it only after you have checked the failure log:
 
 ```powershell
@@ -83,7 +88,7 @@ Example `.local/service.env`:
 
 ```powershell
 HOST=0.0.0.0
-PORT=4173
+WITS_HTTP_PORT=38173
 WITS_ALLOWED_WORKSPACE_ROOTS=F:\projects
 ```
 
@@ -99,6 +104,9 @@ Sent transcripts are queued locally in `.local/agent-commands.jsonl` for a deskt
 ```powershell
 npm run mcp
 ```
+
+The MCP tool `use_mcp_concise_replies` tells an agent to send summarized updates to the Work in the Sun UI with `send_feedback`.
+Commands sent into Codex are prefixed with a small Work in the Sun UI note, so the agent knows to use those MCP feedback tools without the server polling chat history.
 
 ## Status
 

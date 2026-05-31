@@ -105,13 +105,17 @@ Commands are queued as JSON Lines:
     "mode": "existing",
     "route": "work in the sun agent chat"
   },
-  "text": "Open the browser, switch to the running app, and click the save button."
+  "userText": "Open the browser, switch to the running app, and click the save button.",
+  "text": "[From Work in the Sun UI]\nUse the MCP tool use_mcp_concise_replies.\n\nUser request:\nOpen the browser, switch to the running app, and click the save button."
 }
 ```
 
-The command text stays natural language. Desktop app navigation is just another instruction to the selected agent.
+Desktop app navigation is just another instruction to the selected agent.
+For Codex delivery, `text` is agent-facing and is prefixed with a short Work in the Sun UI note telling the agent to call `use_mcp_concise_replies`. The tool then instructs the agent to send summarized UI messages with `send_feedback`. `userText` preserves the original draft without the prefix.
 
 ## HTTP Surface
+
+The frontend UI and backend API share one HTTP server. Its default local port is `38173`; use the `3817x` range for Work in the Sun web surfaces when a separate UI or helper server is added.
 
 - `GET /api/agent/target`
 - `POST /api/agent/target`
@@ -130,6 +134,7 @@ All `/api/*` routes are guarded by the desktop HTTP boundary:
 - Alternatively, save a first-connection PIN in `.local/access-pin` or set `WITS_ACCESS_PIN`. PIN unlock uses application-layer encryption: the browser encrypts the PIN to the backend's `.local/pin-unlock-key.json` public key, and a successful unlock returns the browser-session token encrypted to that single attempt.
 - Failed PIN attempts are appended to `.local/pin-failures.log` without recording the submitted PIN. After three failed attempts, the backend writes `.local/pin-lockout.json` and shuts down.
 - The backend prints the PIN unlock public-key fingerprint at startup. The browser remembers the fingerprint after a successful unlock and refuses future PIN entry if it changes.
+- The PIN screen shows a server identity detail with the app version, the host the browser connected to, and the unlock-key fingerprint. It does not expose the OS machine hostname before authentication.
 - Cross-origin requests are rejected unless their origin is explicitly listed in `WITS_ALLOWED_ORIGINS`.
 - JSON endpoints require `application/json`, enforce request size limits, and have per-client rate limits.
 - Agent providers default to `codex,agent`; set `WITS_ALLOWED_AGENT_PROVIDERS` to opt in more.
@@ -168,7 +173,8 @@ node F:\projects\work-in-the-sun\mcp-server.js
 
 Exposed MCP tools:
 
-- `send_feedback`: append progress/result/warning text for the phone UI.
+- `send_feedback`: append summarized progress/result/warning text for the phone UI.
+- `use_mcp_concise_replies`: ask the agent to send summarized messages to the Work in the Sun UI with `send_feedback`, and persist that preference in `.local/agent-state.json`.
 - `list_commands`: read queued commands by cursor.
 - `get_active_target`: inspect the selected target.
 - `set_active_target`: update the selected target from an agent or router.

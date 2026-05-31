@@ -11,13 +11,14 @@ function finitePositiveNumber(value, fallback) {
 const tools = [
   {
     name: "send_feedback",
-    description: "Send progress, result, or status text back to the Work in the Sun remote UI.",
+    description:
+      "Send a concise summarized progress, result, or status message back to the Work in the Sun remote UI.",
     inputSchema: {
       type: "object",
       properties: {
         text: {
           type: "string",
-          description: "Feedback text to show in the remote UI.",
+          description: "Summarized feedback text to show in the remote UI; do not include raw prompt prefixes or chat history.",
         },
         level: {
           type: "string",
@@ -38,6 +39,44 @@ const tools = [
         },
       },
       required: ["text"],
+    },
+  },
+  {
+    name: "use_mcp_concise_replies",
+    description:
+      "Tell the agent to send summarized messages to the Work in the Sun UI with send_feedback while it works.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        enabled: {
+          type: "boolean",
+          description: "Whether concise UI reply mode should be enabled. Defaults to true.",
+        },
+        maxWords: {
+          type: "number",
+          description: "Target maximum words per progress reply. Defaults to 28; accepted range is 8-80.",
+        },
+        cadence: {
+          type: "string",
+          description: "When to send summarized UI messages, such as meaningful milestones, blockers, and final result.",
+        },
+        note: {
+          type: "string",
+          description: "Optional extra context for the agent's reply style.",
+        },
+        announce: {
+          type: "boolean",
+          description: "Whether to add a small system message to the remote UI. Defaults to false.",
+        },
+        commandId: {
+          type: "string",
+          description: "Optional command id this reply preference applies to.",
+        },
+        targetId: {
+          type: "string",
+          description: "Optional active target id this reply preference is associated with.",
+        },
+      },
     },
   },
   {
@@ -142,6 +181,22 @@ function toolText(text, isError = false) {
   };
 }
 
+function conciseReplyInstructions(preferences) {
+  if (!preferences.enabled) {
+    return "MCP concise replies are disabled. Resume the agent's normal chat and feedback style.";
+  }
+
+  const note = preferences.note ? ` Extra note: ${preferences.note}` : "";
+  return [
+    `Send summarized messages to the Work in the Sun UI with send_feedback (target: ${preferences.maxWords} words per update).`,
+    "Agent instructions:",
+    "- Use send_feedback for compact summaries of meaningful milestones, blockers, and final result.",
+    "- Do not send raw prompt prefixes, full chat history, or tool instructions to the remote UI.",
+    "- Keep each UI message one compact line, outcome-first, with no routine narration.",
+    `- Cadence: ${preferences.cadence}.${note}`,
+  ].join("\n");
+}
+
 async function callTool(name, args = {}) {
   switch (name) {
     case "send_feedback": {
@@ -155,6 +210,29 @@ async function callTool(name, args = {}) {
       });
 
       return toolText(`Feedback sent: ${event.id}`);
+    }
+
+    case "use_mcp_concise_replies": {
+      const preferences = await agentStore.setReplyPreferences({
+        enabled: args.enabled,
+        maxWords: args.maxWords,
+        cadence: args.cadence,
+        note: args.note,
+        source: "mcp",
+      });
+
+      if (args.announce === true) {
+        await agentStore.appendEvent({
+          text: preferences.enabled ? "Concise UI replies on." : "Concise UI replies off.",
+          level: "system",
+          commandId: args.commandId,
+          targetId: args.targetId,
+          speak: false,
+          source: "mcp",
+        });
+      }
+
+      return toolText(conciseReplyInstructions(preferences));
     }
 
     case "list_commands": {
@@ -200,7 +278,7 @@ async function handleRequest(message) {
             version: "0.1.0",
           },
           instructions:
-            "Use send_feedback to report progress back to the user's remote Work in the Sun UI.",
+            "Use use_mcp_concise_replies when asked. Use send_feedback to send concise summarized progress, result, or status messages back to the user's remote Work in the Sun UI.",
         });
       }
 

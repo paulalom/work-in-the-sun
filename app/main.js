@@ -10,13 +10,23 @@ const responseAudioToggle = document.querySelector("#responseAudioToggle");
 const commandModeToggle = document.querySelector("#commandModeToggle");
 const draftText = document.querySelector("#draftText");
 const feed = document.querySelector(".feed");
+const controlDock = document.querySelector(".control-dock");
 const desktopStatus = document.querySelector("#desktopStatus");
+const stateStage = document.querySelector("#stateStage");
 const agentTargetLabel = document.querySelector("#agentTargetLabel");
 const pinGate = document.querySelector("#pinGate");
 const pinForm = document.querySelector("#pinForm");
 const pinInput = document.querySelector("#pinInput");
 const pinMessage = document.querySelector("#pinMessage");
-const pinSubmitButton = pinForm.querySelector("button");
+const pinSubmitButton = document.querySelector("#pinSubmitButton");
+const pinVisibilityButton = document.querySelector("#pinVisibilityButton");
+const serverIdentityVersion = document.querySelector("#serverIdentityVersion");
+const serverIdentityHost = document.querySelector("#serverIdentityHost");
+const serverIdentityFingerprint = document.querySelector("#serverIdentityFingerprint");
+
+const MAX_FEED_MESSAGES = 80;
+const MAX_FEED_MESSAGE_CHARS = 1200;
+const FEED_TRUNCATION_SUFFIX = "...";
 
 let startupSecurityMessage = "";
 let accessToken = readAccessToken();
@@ -56,6 +66,9 @@ let activeListContext = null;
 let lastListedChats = [];
 let appStarted = false;
 let currentPinUnlock = null;
+let currentServerIdentity = {};
+let controlDockResizeObserver = null;
+let pinUnlockInFlight = false;
 let screenshotObjectUrls = [];
 
 const BrowserSpeechRecognition =
@@ -174,7 +187,7 @@ function bytesToBase64(bytes) {
 
 async function encryptedPinUnlockPayload(pin, pinUnlock) {
   if (!window.crypto?.subtle) {
-    throw new Error("Encrypted PIN unlock is unavailable in this browser.");
+    throw new Error("Encrypted password unlock is unavailable in this browser.");
   }
 
   const responseKey = crypto.getRandomValues(new Uint8Array(32));
@@ -228,13 +241,13 @@ async function decryptPinUnlockResponse(result, responseKey) {
 
 function validatePinUnlock(pinUnlock) {
   if (!pinUnlock?.encrypted || !pinUnlock.publicKey || !pinUnlock.fingerprint) {
-    throw new Error("Encrypted PIN unlock is not available.");
+    throw new Error("Encrypted password unlock is not available.");
   }
 
   const remembered = localStorage.getItem("witsPinKeyFingerprint");
 
   if (remembered && remembered !== pinUnlock.fingerprint) {
-    throw new Error("Server PIN key changed. Check the desktop before entering the PIN.");
+    throw new Error("Server unlock key changed. Check the desktop before entering the password.");
   }
 }
 
@@ -242,6 +255,29 @@ function rememberPinFingerprint(pinUnlock) {
   if (pinUnlock?.fingerprint) {
     localStorage.setItem("witsPinKeyFingerprint", pinUnlock.fingerprint);
   }
+}
+
+function setIdentityText(element, value, fallback = "-") {
+  element.textContent = String(value || "").trim() || fallback;
+}
+
+function updateServerIdentityDetail(identity = currentServerIdentity, pinUnlock = currentPinUnlock) {
+  setIdentityText(serverIdentityVersion, identity?.version);
+  setIdentityText(serverIdentityHost, identity?.host || window.location.host);
+  setIdentityText(serverIdentityFingerprint, pinUnlock?.fingerprint);
+}
+
+function formatPasswordUnlockError(message) {
+  const text = String(message || "").trim();
+
+  if (!text) {
+    return "Invalid password.";
+  }
+
+  return text
+    .replace(/^PIN\b/, "Password")
+    .replace(/\bPIN\b/g, "password")
+    .replace(/\bpin\b/g, "password");
 }
 
 async function loadSessionStatus() {
@@ -256,6 +292,8 @@ async function loadSessionStatus() {
 
   const session = await response.json();
   currentPinUnlock = session.pinUnlock || null;
+  currentServerIdentity = session.identity || {};
+  updateServerIdentityDetail();
 
   if (session.pinRequired) {
     validatePinUnlock(currentPinUnlock);
@@ -267,12 +305,10 @@ async function loadSessionStatus() {
 function showPinGate(message = "") {
   pinGate.hidden = false;
   appShell.setAttribute("aria-hidden", "true");
-  pinMessage.textContent =
-    message ||
-    (currentPinUnlock?.fingerprint
-      ? `Server key ${currentPinUnlock.fingerprint.slice(0, 16)}...`
-      : "");
-  pinMessage.title = currentPinUnlock?.fingerprint || "";
+  updateServerIdentityDetail();
+  pinMessage.textContent = message;
+  pinMessage.title = message;
+  setPinVisibility(false);
   pinInput.value = "";
   window.setTimeout(() => pinInput.focus(), 0);
 }
@@ -280,6 +316,7 @@ function showPinGate(message = "") {
 function setPinGateEnabled(enabled) {
   pinInput.disabled = !enabled;
   pinSubmitButton.disabled = !enabled;
+  pinVisibilityButton.disabled = !enabled;
 }
 
 function hidePinGate() {
@@ -289,28 +326,48 @@ function hidePinGate() {
   pinMessage.title = "";
 }
 
+function setPinVisibility(visible) {
+  pinInput.type = visible ? "text" : "password";
+  pinVisibilityButton.textContent = visible ? "Hide" : "Show";
+  pinVisibilityButton.setAttribute("aria-label", visible ? "Hide password" : "Show password");
+  pinVisibilityButton.setAttribute("aria-pressed", String(visible));
+  pinVisibilityButton.title = visible ? "Hide password" : "Show password";
+}
+
+function togglePinVisibility() {
+  setPinVisibility(pinInput.type === "password");
+  pinInput.focus();
+}
+
 async function unlockWithPin(event) {
   event.preventDefault();
+
+  if (pinUnlockInFlight) {
+    return;
+  }
+
   const pin = pinInput.value.trim();
 
   if (!isSafePinTransport()) {
-    pinMessage.textContent = "PIN unlock requires HTTPS or localhost.";
+    pinMessage.textContent = "Password unlock requires HTTPS or localhost.";
     return;
   }
 
   if (!pin) {
-    pinMessage.textContent = "Enter the PIN.";
+    pinMessage.textContent = "Enter the password.";
     pinInput.focus();
     return;
   }
 
   if (currentPinUnlock?.maxPinChars && pin.length > currentPinUnlock.maxPinChars) {
-    pinMessage.textContent = "PIN is too long.";
+    pinMessage.textContent = "Password is too long.";
     pinInput.focus();
     return;
   }
 
-  pinMessage.textContent = "Checking PIN.";
+  pinMessage.textContent = "Checking password.";
+  pinUnlockInFlight = true;
+  setPinGateEnabled(false);
 
   try {
     if (!currentPinUnlock) {
@@ -332,7 +389,7 @@ async function unlockWithPin(event) {
       pinMessage.textContent =
         result.attemptsRemaining === 0
           ? "Backend is shutting down."
-          : result.error || "Invalid PIN.";
+          : formatPasswordUnlockError(result.error);
       pinInput.focus();
       return;
     }
@@ -345,6 +402,12 @@ async function unlockWithPin(event) {
     startApp();
   } catch (error) {
     pinMessage.textContent = error.message || "Backend unavailable.";
+  } finally {
+    pinUnlockInFlight = false;
+
+    if (!pinGate.hidden) {
+      setPinGateEnabled(true);
+    }
   }
 }
 
@@ -357,7 +420,7 @@ async function boot() {
     if (session.pinRequired && !session.authenticated) {
       if (!isSafePinTransport()) {
         setPinGateEnabled(false);
-        showPinGate("PIN unlock requires HTTPS or localhost.");
+        showPinGate("Password unlock requires HTTPS or localhost.");
         return;
       }
 
@@ -394,23 +457,101 @@ function setState(state, label, detail = "", mode = activeCaptureMode) {
   recordButton.classList.toggle("is-active", state === "listening" && mode === "dictation");
   stateLabel.textContent = label;
   stateDetail.textContent = detail;
+  updateStateStageSummary(label, detail);
+}
+
+function updateStateStageSummary(label = stateLabel.textContent, detail = stateDetail.textContent) {
+  const summary = [label, detail].filter(Boolean).join(": ");
+  stateStage.title = summary;
+  stateStage.dataset.statusTitle = summary;
+  stateStage.setAttribute("aria-label", summary);
+}
+
+function syncFeedBottomInset() {
+  const dockHeight = Math.ceil(controlDock.getBoundingClientRect().height);
+
+  if (dockHeight > 0) {
+    document.documentElement.style.setProperty("--control-dock-height", `${dockHeight}px`);
+  }
+}
+
+function scrollFeedToBottom() {
+  syncFeedBottomInset();
+  window.requestAnimationFrame(() => {
+    feed.scrollTop = feed.scrollHeight;
+    window.requestAnimationFrame(() => {
+      feed.scrollTop = feed.scrollHeight;
+    });
+  });
+}
+
+function formatFeedMessageText(text) {
+  const value = String(text || "");
+
+  if (value.length <= MAX_FEED_MESSAGE_CHARS) {
+    return value;
+  }
+
+  return `${value.slice(0, MAX_FEED_MESSAGE_CHARS - FEED_TRUNCATION_SUFFIX.length).trimEnd()}${FEED_TRUNCATION_SUFFIX}`;
+}
+
+function releaseFeedMessageResources(message) {
+  message.querySelectorAll("img").forEach((image) => {
+    const src = image.getAttribute("src") || "";
+
+    if (!src.startsWith("blob:")) {
+      return;
+    }
+
+    URL.revokeObjectURL(src);
+    screenshotObjectUrls = screenshotObjectUrls.filter((url) => url !== src);
+  });
+}
+
+function pruneFeedMessages() {
+  const messages = Array.from(feed.querySelectorAll(".message"));
+  const overflow = messages.length - MAX_FEED_MESSAGES;
+
+  if (overflow <= 0) {
+    return;
+  }
+
+  messages.slice(0, overflow).forEach((message) => {
+    releaseFeedMessageResources(message);
+    message.remove();
+  });
 }
 
 function addMessage(text, type = "system", options = {}) {
+  const displayText = formatFeedMessageText(text);
   const message = document.createElement("article");
   message.className = `message message-${type}`;
 
   const paragraph = document.createElement("p");
-  paragraph.textContent = text;
+  paragraph.textContent = displayText;
   message.append(paragraph);
+
+  if (options.dispatchStatus) {
+    const dispatchLabel = options.dispatchLabel || "Sent";
+    message.classList.add(`is-${options.dispatchStatus}`);
+    message.title = dispatchLabel;
+    message.setAttribute("aria-label", `${displayText} (${dispatchLabel})`);
+
+    const accessibleStatus = document.createElement("span");
+    accessibleStatus.className = "sr-only";
+    accessibleStatus.textContent = ` ${dispatchLabel}.`;
+    message.append(accessibleStatus);
+  }
+
   feed.append(message);
-  feed.scrollTop = feed.scrollHeight;
+  pruneFeedMessages();
+  scrollFeedToBottom();
 
   const shouldSpeak =
     options.speak ?? (responseAudioToggle.checked && ["system", "warning"].includes(type));
 
   if (shouldSpeak) {
-    queueResponseAudio(text);
+    queueResponseAudio(displayText);
   }
 }
 
@@ -423,6 +564,7 @@ function addScreenshotMessage(url, meta = {}) {
   image.src = url;
   image.alt = `Screenshot of ${title}`;
   image.loading = "lazy";
+  image.addEventListener("load", scrollFeedToBottom, { once: true });
 
   const caption = document.createElement("p");
   caption.textContent = meta.chatTitle
@@ -431,7 +573,8 @@ function addScreenshotMessage(url, meta = {}) {
 
   message.append(image, caption);
   feed.append(message);
-  feed.scrollTop = feed.scrollHeight;
+  pruneFeedMessages();
+  scrollFeedToBottom();
 }
 
 function showCommandHelp() {
@@ -822,9 +965,26 @@ async function pollAgentEvents() {
   }
 }
 
+async function primeAgentEventCursor() {
+  try {
+    const response = await apiFetch(`${api.events}?after=latest&limit=1`);
+
+    if (!response.ok) {
+      return;
+    }
+
+    const result = await response.json();
+    agentEventCursor = result.cursor ?? result.total ?? agentEventCursor;
+  } catch {
+    // If priming fails, regular polling can still recover later.
+  }
+}
+
 function startAgentEventPolling() {
-  pollAgentEvents();
-  window.setInterval(pollAgentEvents, 2400);
+  primeAgentEventCursor().finally(() => {
+    pollAgentEvents();
+    window.setInterval(pollAgentEvents, 2400);
+  });
 }
 
 function parseScreenshotMeta(response) {
@@ -1024,7 +1184,7 @@ async function continueList() {
 
 async function setInitialSpeechMode() {
   if (useBrowserSpeechDemo && BrowserSpeechRecognition) {
-    stateDetail.textContent = "Browser speech demo ready";
+    setState("idle", "Ready", "Browser speech demo ready");
     addMessage("Browser speech demo ready. Desktop adapter still pending.", "system");
     return;
   }
@@ -1037,15 +1197,20 @@ async function setInitialSpeechMode() {
 
     if (response.ok && health.speech?.available) {
       desktopStatus.classList.add("is-online");
-      stateDetail.textContent = "Local Dictate ready";
-      addMessage("Local Dictate backend ready.", "system");
+      desktopStatus.title = "Desktop connected";
+      desktopStatus.setAttribute("aria-label", "Desktop connected");
+      setState("idle", "Ready", "Local Dictate ready");
       return;
     }
 
-    stateDetail.textContent = "Local Dictate missing";
+    desktopStatus.title = "Desktop connected; speech backend missing";
+    desktopStatus.setAttribute("aria-label", "Desktop connected; speech backend missing");
+    setState("idle", "Ready", "Local Dictate missing");
     addMessage("Run the Local Dictate release installer, then restart the backend.", "warning");
   } catch {
-    stateDetail.textContent = "Desktop backend pending";
+    desktopStatus.title = "Desktop backend pending";
+    desktopStatus.setAttribute("aria-label", "Desktop backend pending");
+    setState("idle", "Ready", "Desktop backend pending");
   }
 }
 
@@ -2023,15 +2188,28 @@ async function sendTranscript(source = "manual") {
     const result = await response.json();
     const queued = result.command?.status === "queued" || result.message?.status === "queued";
     const target = result.command?.target || result.message?.target;
-    const status = queued ? "Queued for agent." : "Sent to agent.";
-    addMessage(text, "user");
-    addMessage(status, "system");
+    const status = queued ? "Queued" : "Sent";
+    const dispatchStatus = queued ? "queued" : "sent";
+    const dispatchLabel = queued ? "Queued for agent" : "Sent to agent";
+    addMessage(text, "user", { dispatchStatus, dispatchLabel });
     renderAgentTarget(target);
     setDraftText("");
     setState("idle", "Ready", status);
   } catch (error) {
     addMessage(error.message || "Desktop command route is not connected.", "warning");
     setState("idle", "Ready", "Desktop route pending");
+  }
+}
+
+function handleDraftKeyDown(event) {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.repeat) {
+    return;
+  }
+
+  event.preventDefault();
+
+  if (getDraftText()) {
+    sendTranscript("manual");
   }
 }
 
@@ -2087,10 +2265,12 @@ function bindHoldToRecord(button, mode) {
 bindHoldToRecord(recordButton, "dictation");
 bindHoldToRecord(commandButton, "command");
 sendButton.addEventListener("click", () => sendTranscript("manual"));
+draftText.addEventListener("keydown", handleDraftKeyDown);
 draftText.addEventListener("input", () => {
   lastTranscript = getDraftText();
   sendButton.disabled = !lastTranscript;
   resizeDraft();
+  syncFeedBottomInset();
 });
 autoSendToggle.addEventListener("change", () => {
   setState("idle", "Ready", autoSendToggle.checked ? "Auto Send on" : "Auto Send off");
@@ -2117,10 +2297,21 @@ echoToggle.addEventListener("change", async () => {
   }
 });
 pinForm.addEventListener("submit", unlockWithPin);
+pinVisibilityButton.addEventListener("click", togglePinVisibility);
+
+if (window.ResizeObserver) {
+  controlDockResizeObserver = new ResizeObserver(syncFeedBottomInset);
+  controlDockResizeObserver.observe(controlDock);
+}
+
+window.addEventListener("resize", syncFeedBottomInset);
+syncFeedBottomInset();
+updateStateStageSummary();
 boot();
 
 window.addEventListener("pagehide", () => {
   stopRecording();
+  controlDockResizeObserver?.disconnect();
   mediaStream?.getTracks().forEach((track) => track.stop());
   screenshotObjectUrls.forEach((url) => URL.revokeObjectURL(url));
   screenshotObjectUrls = [];

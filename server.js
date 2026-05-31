@@ -9,9 +9,11 @@ const agentStore = require("./lib/agent-store");
 const codexBridge = require("./lib/codex-bridge");
 const codexCatalog = require("./lib/codex-catalog");
 const windowScreenshot = require("./lib/window-screenshot");
+const packageJson = require("./package.json");
 
+const DEFAULT_PORT = 38173;
 const HOST = process.env.HOST || "127.0.0.1";
-const PORT = Number(process.env.PORT || 4173);
+const PORT = Number(process.env.WITS_HTTP_PORT || process.env.PORT || DEFAULT_PORT);
 const APP_DIR = path.join(__dirname, "app");
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_JSON_BYTES = 64 * 1024;
@@ -47,6 +49,7 @@ const CHILD_PROCESS_TIMEOUT_MS = finitePositiveNumber(process.env.WITS_CHILD_PRO
 const CHILD_PROCESS_OUTPUT_BYTES = finitePositiveNumber(process.env.WITS_CHILD_PROCESS_OUTPUT_BYTES, 512 * 1024);
 const PIN_UNLOCK_AAD = "work-in-the-sun:pin-unlock:v1";
 const PIN_KEY_PAIR = PIN_ENABLED ? loadOrCreatePinKeyPair() : null;
+const APP_VERSION = String(packageJson.version || "0.0.0");
 
 const LOCAL_DICTATE_CANDIDATES = [
   process.env.LOCAL_DICTATE_ROOT,
@@ -844,6 +847,7 @@ async function getAgentTarget(response) {
 async function sessionStatus(request, response) {
   authorizeSessionRequest(request);
   json(response, 200, {
+    identity: sessionIdentity(request),
     pinRequired: PIN_ENABLED,
     authenticated: !ACCESS_TOKEN || verifyAccessToken(request),
     pinUnlock: PIN_ENABLED
@@ -1045,12 +1049,14 @@ async function queueAgentCommand(request, response) {
   const body = await readJson(request, MAX_JSON_BYTES);
 
   try {
+    const text = String(body.text || "");
     const target = body.target
       ? agentStore.normalizeAgentTarget(body.target)
       : await agentStore.getActiveTarget();
     const deliveryPreview = codexBridge.dispatchRoute({ target });
     const command = await agentStore.appendCommand({
-      text: body.text,
+      text: codexBridge.agentCommandText(text),
+      userText: text,
       input: body.input,
       source: body.source,
       echo: body.echo,
@@ -1129,6 +1135,20 @@ async function postAgentEvent(request, response) {
 function truncateMeta(value, maxChars = 300) {
   const text = String(value || "").replace(/[\r\n]+/g, " ").trim();
   return text.length <= maxChars ? text : text.slice(0, maxChars);
+}
+
+function identityText(value, maxChars = 160) {
+  const text = String(value || "")
+    .replace(/[\0\r\n]+/g, " ")
+    .trim();
+  return text.length <= maxChars ? text : text.slice(0, maxChars);
+}
+
+function sessionIdentity(request) {
+  return {
+    version: identityText(APP_VERSION, 40),
+    host: identityText(request.headers.host || `${HOST}:${PORT}`, 160),
+  };
 }
 
 function screenshotMetaHeader(meta) {

@@ -29,10 +29,13 @@ function Get-BackendProcesses {
     $escapedRepo = $repoRoot.Replace("\", "\\")
     Get-CimInstance Win32_Process |
         Where-Object {
+            $isBackendRunner = $_.CommandLine -match '[\\/]backend-service-runner\.ps1(?:"|''|\s|$)'
+            $isBackendServer = $_.CommandLine -match '[\\/]server\.js(?:"|''|\s|$)'
+
             $_.Name -match "^(node|node.exe|powershell|powershell.exe|pwsh|pwsh.exe)$" -and
             $_.CommandLine -and
             ($_.CommandLine.Contains($repoRoot) -or $_.CommandLine.Contains($escapedRepo)) -and
-            ($_.CommandLine.Contains("server.js") -or $_.CommandLine.Contains("backend-service-runner.ps1"))
+            ($isBackendServer -or $isBackendRunner)
         }
 }
 

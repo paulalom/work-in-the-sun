@@ -12,6 +12,7 @@
   --record-dark: #991b1b;
   --warning: #c47d13;
   --shadow: 0 18px 48px rgba(15, 23, 42, 0.12);
+  --control-dock-height: 292px;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -53,10 +54,13 @@ textarea {
 
 .app-shell {
   width: min(100%, 560px);
+  height: 100svh;
+  height: 100dvh;
   min-height: 100svh;
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto;
+  grid-template-rows: auto auto 1fr auto;
   margin: 0 auto;
+  overflow: hidden;
   background: var(--surface);
   box-shadow: var(--shadow);
 }
@@ -93,6 +97,13 @@ textarea {
   letter-spacing: 0;
 }
 
+.pin-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  gap: 8px;
+  align-items: stretch;
+}
+
 .pin-panel input {
   width: 100%;
   min-height: 48px;
@@ -112,6 +123,55 @@ textarea {
   background: var(--text);
   color: #ffffff;
   font-weight: 800;
+}
+
+.pin-panel .pin-visibility-button {
+  min-height: 48px;
+  border-color: var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.server-identity {
+  border-top: 1px solid var(--line);
+  padding-top: 4px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.server-identity summary {
+  width: fit-content;
+  cursor: pointer;
+  color: #33506f;
+  font-weight: 700;
+}
+
+.server-identity dl {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0;
+}
+
+.server-identity div {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.server-identity dt {
+  color: #64748b;
+  font-weight: 700;
+}
+
+.server-identity dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #243447;
 }
 
 .pin-message {
@@ -135,6 +195,13 @@ textarea {
   flex: 1 1 auto;
 }
 
+.top-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .kicker {
   margin: 0 0 2px;
   color: var(--muted);
@@ -152,16 +219,21 @@ h1 {
 
 .desktop-status {
   flex: 0 0 auto;
-  min-height: 36px;
+  width: 40px;
+  height: 40px;
+  min-height: 0;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
+  justify-content: center;
+  padding: 0;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 50%;
   color: var(--muted);
   font-size: 0.9rem;
-  white-space: nowrap;
+}
+
+.desktop-status span:last-child {
+  display: none;
 }
 
 .status-dot {
@@ -188,6 +260,7 @@ h1 {
 }
 
 .target-strip strong {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--text);
@@ -197,33 +270,55 @@ h1 {
 }
 
 .stage {
-  min-height: 220px;
+  position: relative;
+  width: 40px;
+  height: 40px;
+  min-height: 0;
   display: grid;
   place-items: center;
-  align-content: center;
-  gap: 12px;
-  padding: 28px 18px;
-  border-bottom: 1px solid var(--line);
-  background:
-    radial-gradient(circle at center 42%, rgba(15, 118, 110, 0.12), transparent 34%),
-    linear-gradient(180deg, #ffffff, #f4f7fb);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: #fbfcfe;
+}
+
+.stage::after {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 2;
+  display: none;
+  width: max-content;
+  max-width: min(260px, calc(100vw - 28px));
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--text);
+  color: #ffffff;
+  content: attr(data-status-title);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.stage:hover::after,
+.stage:focus-visible::after {
+  display: block;
 }
 
 .pulse {
-  width: min(42vw, 172px);
+  width: 24px;
   aspect-ratio: 1;
-  border: 1px solid rgba(15, 118, 110, 0.22);
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  background: rgba(255, 255, 255, 0.72);
+  gap: 2px;
 }
 
 .pulse span {
-  width: 8px;
-  height: 26px;
+  width: 3px;
+  height: 12px;
   border-radius: 999px;
   background: var(--accent);
   transform: scaleY(0.45);
@@ -278,17 +373,27 @@ h1 {
 }
 
 .state-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 800;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .state-detail {
-  max-width: 28ch;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
   margin: 0;
-  color: var(--muted);
-  text-align: center;
-  line-height: 1.35;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .feed {
@@ -297,11 +402,12 @@ h1 {
   flex-direction: column;
   gap: 12px;
   overflow: auto;
-  padding: 16px 16px 292px;
+  padding: 16px 16px calc(var(--control-dock-height) + 20px);
   background: #fbfcfe;
 }
 
 .message {
+  position: relative;
   width: fit-content;
   max-width: min(86%, 420px);
   padding: 11px 12px;
@@ -317,8 +423,39 @@ h1 {
 
 .message-user {
   margin-left: auto;
+  padding-right: 30px;
   background: #eaf6f4;
   border-color: #cbe7e2;
+}
+
+.message-user.is-sent::after,
+.message-user.is-queued::after {
+  position: absolute;
+  right: 10px;
+  bottom: 9px;
+  width: 13px;
+  height: 13px;
+  border: 1px solid #7fb8ae;
+  border-radius: 50%;
+  content: "";
+}
+
+.message-user.is-sent::before {
+  position: absolute;
+  right: 14px;
+  bottom: 13px;
+  z-index: 1;
+  width: 5px;
+  height: 8px;
+  border-right: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  content: "";
+  transform: rotate(42deg);
+}
+
+.message-user.is-queued::after {
+  border-color: #94a3b8;
+  border-style: dashed;
 }
 
 .message-system {
@@ -551,6 +688,7 @@ h1 {
 
 button:focus-visible,
 .toggle-control input:focus-visible + .switch,
+.pin-panel input:focus-visible,
 .draft-panel textarea:focus-visible {
   outline: 3px solid rgba(37, 99, 235, 0.26);
   outline-offset: 3px;
@@ -563,8 +701,18 @@ button:focus-visible,
   }
 
   .desktop-status {
-    padding: 0 8px;
+    width: 36px;
+    height: 36px;
     font-size: 0.82rem;
+  }
+
+  .top-status {
+    gap: 6px;
+  }
+
+  .stage {
+    width: 36px;
+    height: 36px;
   }
 
   .control-dock {
@@ -592,16 +740,5 @@ button:focus-visible,
 
   .send-button {
     min-width: 66px;
-  }
-}
-
-@media (max-width: 340px) {
-  .desktop-status span:last-child {
-    display: none;
-  }
-
-  .desktop-status {
-    min-width: 36px;
-    justify-content: center;
   }
 }
