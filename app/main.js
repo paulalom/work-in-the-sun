@@ -7,15 +7,26 @@ const sendButton = document.querySelector("#sendButton");
 const echoToggle = document.querySelector("#echoToggle");
 const autoSendToggle = document.querySelector("#autoSendToggle");
 const responseAudioToggle = document.querySelector("#responseAudioToggle");
+const commandModeToggle = document.querySelector("#commandModeToggle");
 const draftText = document.querySelector("#draftText");
 const feed = document.querySelector(".feed");
 const desktopStatus = document.querySelector("#desktopStatus");
 const agentTargetLabel = document.querySelector("#agentTargetLabel");
+const pinGate = document.querySelector("#pinGate");
+const pinForm = document.querySelector("#pinForm");
+const pinInput = document.querySelector("#pinInput");
+const pinMessage = document.querySelector("#pinMessage");
+const pinSubmitButton = pinForm.querySelector("button");
 
+let startupSecurityMessage = "";
+let accessToken = readAccessToken();
 const api = {
+  sessionStatus: "/api/session/status",
+  sessionUnlock: "/api/session/unlock",
   transcribe: "/api/speech/transcribe",
   synthesize: "/api/speech/synthesize",
   sendCommand: "/api/agent/commands",
+  screenshot: "/api/screenshot/active-window",
   target: "/api/agent/target",
   events: "/api/agent/events",
   catalog: "/api/agent/catalog",
@@ -43,6 +54,9 @@ let responseAudioQueue = Promise.resolve();
 let agentEventCursor = 0;
 let activeListContext = null;
 let lastListedChats = [];
+let appStarted = false;
+let currentPinUnlock = null;
+let screenshotObjectUrls = [];
 
 const BrowserSpeechRecognition =
   window.SpeechRecognition || window.webkitSpeechRecognition || null;
@@ -55,12 +69,14 @@ const commandHelp = [
   "echo on / echo off",
   "auto send on / auto send off",
   "responses on / responses off",
+  "commands on / commands off",
   "list",
   "list projects / list chats",
   "list work in the sun",
   "list chats in work in the sun",
   "continue",
   "use listed one",
+  "screenshot",
   "use codex work in the sun agent chat",
   "use codex work in the sun new",
   "stop audio",
@@ -70,6 +86,304 @@ const commandHelp = [
   "replace with ...",
   "combine commands with comma, then, or and",
 ];
+
+function readAccessToken() {
+  const names = ["wits_token", "access_token", "token"];
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const token = names.map((name) => searchParams.get(name) || hashParams.get(name)).find(Boolean);
+
+  if (token) {
+    if (!isSafePinTransport()) {
+      startupSecurityMessage = "Remote unlock requires HTTPS. The URL token was ignored.";
+      names.forEach((name) => {
+        searchParams.delete(name);
+        hashParams.delete(name);
+      });
+      const nextSearch = searchParams.toString();
+      const nextHash = hashParams.toString();
+      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${
+        nextHash ? `#${nextHash}` : ""
+      }`;
+      window.history.replaceState(null, "", nextUrl);
+      return "";
+    }
+
+    sessionStorage.setItem("witsAccessToken", token);
+
+    names.forEach((name) => {
+      searchParams.delete(name);
+      hashParams.delete(name);
+    });
+
+    const nextSearch = searchParams.toString();
+    const nextHash = hashParams.toString();
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${
+      nextHash ? `#${nextHash}` : ""
+    }`;
+    window.history.replaceState(null, "", nextUrl);
+    return token;
+  }
+
+  return sessionStorage.getItem("witsAccessToken") || "";
+}
+
+function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+
+  if (accessToken) {
+    headers.set("X-WITS-Token", accessToken);
+  }
+
+  return fetch(url, {
+    ...options,
+    headers,
+  });
+}
+
+function isLoopbackHostname(hostname) {
+  const value = String(hostname || "").toLowerCase();
+  return value === "localhost" || value === "::1" || value === "[::1]" || value.startsWith("127.");
+}
+
+function isSafePinTransport() {
+  return window.isSecureContext || isLoopbackHostname(window.location.hostname);
+}
+
+function base64ToBytes(value) {
+  const binary = window.atob(value);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+
+  return window.btoa(binary);
+}
+
+async function encryptedPinUnlockPayload(pin, pinUnlock) {
+  if (!window.crypto?.subtle) {
+    throw new Error("Encrypted PIN unlock is unavailable in this browser.");
+  }
+
+  const responseKey = crypto.getRandomValues(new Uint8Array(32));
+  const nonce = crypto.getRandomValues(new Uint8Array(16));
+  const publicKey = await crypto.subtle.importKey(
+    "spki",
+    base64ToBytes(pinUnlock.publicKey),
+    {
+      name: "RSA-OAEP",
+      hash: "SHA-256",
+    },
+    false,
+    ["encrypt"],
+  );
+  const payload = new TextEncoder().encode(
+    JSON.stringify({
+      pin,
+      responseKey: bytesToBase64(responseKey),
+      nonce: bytesToBase64(nonce),
+    }),
+  );
+  const encrypted = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, payload);
+
+  return {
+    request: {
+      keyFingerprint: pinUnlock.fingerprint,
+      encryptedPin: bytesToBase64(new Uint8Array(encrypted)),
+    },
+    responseKey,
+  };
+}
+
+async function decryptPinUnlockResponse(result, responseKey) {
+  if (!result.encrypted || result.algorithm !== "A256GCM") {
+    throw new Error("Encrypted unlock response was not returned.");
+  }
+
+  const key = await crypto.subtle.importKey("raw", responseKey, { name: "AES-GCM" }, false, ["decrypt"]);
+  const decrypted = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: base64ToBytes(result.iv),
+      additionalData: new TextEncoder().encode(result.aad || "work-in-the-sun:pin-unlock:v1"),
+    },
+    key,
+    base64ToBytes(result.ciphertext),
+  );
+
+  return JSON.parse(new TextDecoder().decode(decrypted));
+}
+
+function validatePinUnlock(pinUnlock) {
+  if (!pinUnlock?.encrypted || !pinUnlock.publicKey || !pinUnlock.fingerprint) {
+    throw new Error("Encrypted PIN unlock is not available.");
+  }
+
+  const remembered = localStorage.getItem("witsPinKeyFingerprint");
+
+  if (remembered && remembered !== pinUnlock.fingerprint) {
+    throw new Error("Server PIN key changed. Check the desktop before entering the PIN.");
+  }
+}
+
+function rememberPinFingerprint(pinUnlock) {
+  if (pinUnlock?.fingerprint) {
+    localStorage.setItem("witsPinKeyFingerprint", pinUnlock.fingerprint);
+  }
+}
+
+async function loadSessionStatus() {
+  const response = await apiFetch(api.sessionStatus);
+
+  if (!response.ok) {
+    return {
+      pinRequired: false,
+      authenticated: false,
+    };
+  }
+
+  const session = await response.json();
+  currentPinUnlock = session.pinUnlock || null;
+
+  if (session.pinRequired) {
+    validatePinUnlock(currentPinUnlock);
+  }
+
+  return session;
+}
+
+function showPinGate(message = "") {
+  pinGate.hidden = false;
+  appShell.setAttribute("aria-hidden", "true");
+  pinMessage.textContent =
+    message ||
+    (currentPinUnlock?.fingerprint
+      ? `Server key ${currentPinUnlock.fingerprint.slice(0, 16)}...`
+      : "");
+  pinMessage.title = currentPinUnlock?.fingerprint || "";
+  pinInput.value = "";
+  window.setTimeout(() => pinInput.focus(), 0);
+}
+
+function setPinGateEnabled(enabled) {
+  pinInput.disabled = !enabled;
+  pinSubmitButton.disabled = !enabled;
+}
+
+function hidePinGate() {
+  pinGate.hidden = true;
+  appShell.removeAttribute("aria-hidden");
+  pinMessage.textContent = "";
+  pinMessage.title = "";
+}
+
+async function unlockWithPin(event) {
+  event.preventDefault();
+  const pin = pinInput.value.trim();
+
+  if (!isSafePinTransport()) {
+    pinMessage.textContent = "PIN unlock requires HTTPS or localhost.";
+    return;
+  }
+
+  if (!pin) {
+    pinMessage.textContent = "Enter the PIN.";
+    pinInput.focus();
+    return;
+  }
+
+  if (currentPinUnlock?.maxPinChars && pin.length > currentPinUnlock.maxPinChars) {
+    pinMessage.textContent = "PIN is too long.";
+    pinInput.focus();
+    return;
+  }
+
+  pinMessage.textContent = "Checking PIN.";
+
+  try {
+    if (!currentPinUnlock) {
+      const session = await loadSessionStatus();
+      currentPinUnlock = session.pinUnlock || null;
+    }
+
+    validatePinUnlock(currentPinUnlock);
+    const unlock = await encryptedPinUnlockPayload(pin, currentPinUnlock);
+    const response = await fetch(api.sessionUnlock, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(unlock.request),
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      pinInput.value = "";
+      pinMessage.textContent =
+        result.attemptsRemaining === 0
+          ? "Backend is shutting down."
+          : result.error || "Invalid PIN.";
+      pinInput.focus();
+      return;
+    }
+
+    const decrypted = await decryptPinUnlockResponse(result, unlock.responseKey);
+    accessToken = decrypted.accessToken || "";
+    sessionStorage.setItem("witsAccessToken", accessToken);
+    rememberPinFingerprint(currentPinUnlock);
+    hidePinGate();
+    startApp();
+  } catch (error) {
+    pinMessage.textContent = error.message || "Backend unavailable.";
+  }
+}
+
+async function boot() {
+  resizeDraft();
+
+  try {
+    const session = await loadSessionStatus();
+
+    if (session.pinRequired && !session.authenticated) {
+      if (!isSafePinTransport()) {
+        setPinGateEnabled(false);
+        showPinGate("PIN unlock requires HTTPS or localhost.");
+        return;
+      }
+
+      setPinGateEnabled(true);
+      showPinGate(startupSecurityMessage);
+      return;
+    }
+  } catch (error) {
+    setPinGateEnabled(false);
+    showPinGate(error.message || "Secure unlock is unavailable.");
+    return;
+  }
+
+  startApp();
+}
+
+function startApp() {
+  if (appStarted) {
+    return;
+  }
+
+  appStarted = true;
+  setInitialSpeechMode();
+  loadAgentTarget();
+  startAgentEventPolling();
+}
 
 function setState(state, label, detail = "", mode = activeCaptureMode) {
   appShell.classList.toggle("is-listening", state === "listening");
@@ -98,6 +412,26 @@ function addMessage(text, type = "system", options = {}) {
   if (shouldSpeak) {
     queueResponseAudio(text);
   }
+}
+
+function addScreenshotMessage(url, meta = {}) {
+  const message = document.createElement("article");
+  message.className = "message message-agent message-screenshot";
+
+  const image = document.createElement("img");
+  const title = meta.chatTitle || meta.windowTitle || "active window";
+  image.src = url;
+  image.alt = `Screenshot of ${title}`;
+  image.loading = "lazy";
+
+  const caption = document.createElement("p");
+  caption.textContent = meta.chatTitle
+    ? `Screenshot: ${meta.chatTitle}`
+    : `Screenshot: ${meta.windowTitle || "active window"}`;
+
+  message.append(image, caption);
+  feed.append(message);
+  feed.scrollTop = feed.scrollHeight;
 }
 
 function showCommandHelp() {
@@ -286,7 +620,7 @@ function renderAgentTarget(target) {
 
 async function loadAgentTarget() {
   try {
-    const response = await fetch(api.target);
+    const response = await apiFetch(api.target);
 
     if (!response.ok) {
       return;
@@ -300,16 +634,23 @@ async function loadAgentTarget() {
 }
 
 function parseAgentTargetCommand(command) {
-  const match = command.trim().match(/^use\s+([a-z0-9_-]+)\s+(.+)$/i);
+  const cleaned = extractCommandText(command);
+  const words = cleaned.split(/\s+/).filter(Boolean);
 
-  if (!match) {
+  if (words.length < 3 || normalizeCommand(words[0]) !== "use") {
     return null;
   }
 
-  const provider = match[1].toLowerCase();
-  const route = match[2].trim();
-  const mode = /\bnew$/i.test(route) ? "new" : "existing";
-  const sessionHint = route.replace(/\bnew$/i, "").trim() || "new";
+  const provider = words[1].toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  const route = extractCommandValue(words.slice(2).join(" "));
+
+  if (!provider || !route) {
+    return null;
+  }
+
+  const normalizedRoute = normalizeCommand(route);
+  const mode = normalizedRoute.endsWith(" new") || normalizedRoute === "new" ? "new" : "existing";
+  const sessionHint = mode === "new" ? extractCommandValue(route.replace(/\bnew\b$/i, "")) || "new" : route;
 
   return {
     provider,
@@ -322,9 +663,18 @@ function parseAgentTargetCommand(command) {
 
 function parseSpokenNumber(text) {
   const normalized = normalizeCommand(text);
+  const candidates = [
+    normalized,
+    normalized.replace(/^(?:number|chat|listed)\s+/, ""),
+    normalized.split(" ").at(-1) || "",
+  ].filter(Boolean);
   const words = new Map([
+    ["zero", 0],
+    ["oh", 0],
+    ["o", 0],
     ["one", 1],
     ["first", 1],
+    ["won", 1],
     ["two", 2],
     ["second", 2],
     ["to", 2],
@@ -334,6 +684,7 @@ function parseSpokenNumber(text) {
     ["four", 4],
     ["fourth", 4],
     ["for", 4],
+    ["fore", 4],
     ["five", 5],
     ["fifth", 5],
     ["six", 6],
@@ -343,17 +694,25 @@ function parseSpokenNumber(text) {
     ["eight", 8],
     ["eighth", 8],
     ["ate", 8],
+    ["aid", 8],
     ["nine", 9],
     ["ninth", 9],
+    ["niner", 9],
     ["ten", 10],
     ["tenth", 10],
   ]);
 
-  if (/^\d+$/.test(normalized)) {
-    return Number(normalized);
+  for (const candidate of candidates) {
+    if (/^\d+$/.test(candidate)) {
+      return Number(candidate);
+    }
+
+    if (words.has(candidate)) {
+      return words.get(candidate);
+    }
   }
 
-  return words.get(normalized) || null;
+  return null;
 }
 
 function parseUseListedCommand(command) {
@@ -403,8 +762,10 @@ function parseProjectChatListCommand(command) {
     return listTarget;
   }
 
-  if (activeListContext?.kind === "choices" && command.trim()) {
-    return command.trim();
+  const cleaned = extractCommandValue(command);
+
+  if (activeListContext?.kind === "choices" && cleaned) {
+    return cleaned;
   }
 
   return null;
@@ -414,7 +775,7 @@ async function setAgentTarget(target) {
   setState("processing", "Routing", "Updating agent target");
 
   try {
-    const response = await fetch(api.target, {
+    const response = await apiFetch(api.target, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(target),
@@ -447,7 +808,7 @@ function handleAgentEvent(event) {
 
 async function pollAgentEvents() {
   try {
-    const response = await fetch(`${api.events}?after=${agentEventCursor}`);
+    const response = await apiFetch(`${api.events}?after=${agentEventCursor}`);
 
     if (!response.ok) {
       return;
@@ -464,6 +825,52 @@ async function pollAgentEvents() {
 function startAgentEventPolling() {
   pollAgentEvents();
   window.setInterval(pollAgentEvents, 2400);
+}
+
+function parseScreenshotMeta(response) {
+  const encoded = response.headers.get("X-WITS-Screenshot-Meta");
+
+  if (!encoded) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(decodeURIComponent(encoded));
+  } catch {
+    return {};
+  }
+}
+
+async function responseError(response, fallback) {
+  try {
+    const result = await response.json();
+    return new Error(result.error || fallback);
+  } catch {
+    return new Error(fallback);
+  }
+}
+
+async function requestScreenshot() {
+  setState("processing", "Screenshot", "Capturing active window");
+
+  try {
+    const response = await apiFetch(api.screenshot, { method: "POST" });
+
+    if (!response.ok) {
+      throw await responseError(response, "Screenshot capture failed.");
+    }
+
+    const meta = parseScreenshotMeta(response);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    screenshotObjectUrls.push(url);
+
+    addScreenshotMessage(url, meta);
+    setState("idle", "Ready", "Screenshot captured");
+  } catch (error) {
+    addMessage(error.message || "Screenshot capture failed.", "warning");
+    setState("idle", "Ready", "Screenshot unavailable");
+  }
 }
 
 function promptListKind() {
@@ -491,7 +898,7 @@ async function fetchCatalog(kind, options = {}) {
   }
 
   const suffix = params.toString() ? `?${params}` : "";
-  const response = await fetch(`${api.catalog}/${kind}${suffix}`);
+  const response = await apiFetch(`${api.catalog}/${kind}${suffix}`);
 
   if (!response.ok) {
     throw new Error("Could not load the Codex list.");
@@ -623,7 +1030,7 @@ async function setInitialSpeechMode() {
   }
 
   try {
-    const response = await fetch("/api/health");
+    const response = await apiFetch("/api/health");
     const health = await response.json();
 
     renderAgentTarget(health.agent?.activeTarget);
@@ -872,7 +1279,7 @@ async function handleRecordingStop() {
 }
 
 async function transcribeAudio(audio, metadata) {
-  const response = await fetch(api.transcribe, {
+  const response = await apiFetch(api.transcribe, {
     method: "POST",
     headers: {
       "Content-Type": metadata.mimeType || "application/octet-stream",
@@ -911,7 +1318,7 @@ async function handleTranscriptResult(transcript, mode, readyDetail = "Transcrip
 }
 
 async function applyVoiceCommand(commandText) {
-  const command = commandText.trim();
+  const command = extractCommandText(commandText);
 
   if (!command) {
     setState("idle", "Ready", "Local Dictate ready");
@@ -958,24 +1365,25 @@ function splitCommandComposition(command) {
 function splitCommandParts(command, separator) {
   return command
     .split(separator)
-    .map((part) => part.trim())
+    .map((part) => extractCommandText(part))
     .filter(Boolean);
 }
 
 function parseSingleVoiceCommand(command) {
-  const normalized = normalizeCommand(command);
+  const cleaned = extractCommandText(command);
+  const normalized = normalizeCommand(cleaned);
 
   if (!normalized) {
     return null;
   }
 
-  const listedChatNumber = parseUseListedCommand(command);
+  const listedChatNumber = parseUseListedCommand(cleaned);
 
   if (listedChatNumber !== null) {
     return { type: "useListedChat", number: listedChatNumber };
   }
 
-  const agentTarget = parseAgentTargetCommand(command);
+  const agentTarget = parseAgentTargetCommand(cleaned);
 
   if (agentTarget) {
     return { type: "setAgentTarget", target: agentTarget };
@@ -1003,7 +1411,7 @@ function parseSingleVoiceCommand(command) {
     return { type: "continueList" };
   }
 
-  const projectChatList = parseProjectChatListCommand(command);
+  const projectChatList = parseProjectChatListCommand(cleaned);
 
   if (projectChatList) {
     return { type: "listChats", project: projectChatList };
@@ -1013,6 +1421,24 @@ function parseSingleVoiceCommand(command) {
     {
       type: "send",
       commands: ["send", "send it", "send message", "queue", "queue it", "submit"],
+    },
+    {
+      type: "screenshot",
+      commands: [
+        "screenshot",
+        "screen shot",
+        "take screenshot",
+        "take screen shot",
+        "send screenshot",
+        "send a screenshot",
+        "send screen shot",
+        "send a screen shot",
+        "capture screenshot",
+        "capture screen shot",
+        "capture window",
+        "show screen",
+        "show active window",
+      ],
     },
     {
       type: "clear",
@@ -1059,6 +1485,28 @@ function parseSingleVoiceCommand(command) {
       ],
     },
     {
+      type: "commandModeOn",
+      commands: [
+        "commands on",
+        "command mode on",
+        "text commands on",
+        "chat commands on",
+        "send commands on",
+      ],
+    },
+    {
+      type: "commandModeOff",
+      commands: [
+        "commands off",
+        "command mode off",
+        "text commands off",
+        "chat commands off",
+        "send commands off",
+        "messages on",
+        "message mode on",
+      ],
+    },
+    {
       type: "stopAudio",
       commands: [
         "stop",
@@ -1088,7 +1536,7 @@ function parseSingleVoiceCommand(command) {
     }
   }
 
-  const replacement = commandRemainder(command, [
+  const replacement = commandRemainder(cleaned, [
     "replace draft with",
     "replace message with",
     "replace with",
@@ -1102,7 +1550,7 @@ function parseSingleVoiceCommand(command) {
     return { type: "replace", text: replacement };
   }
 
-  const appendText = commandRemainder(command, [
+  const appendText = commandRemainder(cleaned, [
     "append to draft",
     "append to message",
     "add to draft",
@@ -1115,7 +1563,7 @@ function parseSingleVoiceCommand(command) {
     return { type: "append", text: appendText };
   }
 
-  const prependText = commandRemainder(command, ["prepend", "start with", "put before"]);
+  const prependText = commandRemainder(cleaned, ["prepend", "start with", "put before"]);
 
   if (prependText !== null) {
     return { type: "prepend", text: prependText };
@@ -1128,6 +1576,10 @@ async function applySingleVoiceCommand(action) {
   switch (action.type) {
     case "send":
       await sendTranscript("command");
+      return;
+
+    case "screenshot":
+      await requestScreenshot();
       return;
 
     case "clear":
@@ -1166,6 +1618,16 @@ async function applySingleVoiceCommand(action) {
 
     case "responsesOff":
       setResponseAudio(false);
+      return;
+
+    case "commandModeOn":
+      commandModeToggle.checked = true;
+      announceCommand("Commands on.", "Text commands on");
+      return;
+
+    case "commandModeOff":
+      commandModeToggle.checked = false;
+      announceCommand("Commands off.", "Text messages on");
       return;
 
     case "setAgentTarget":
@@ -1235,32 +1697,58 @@ async function applySingleVoiceCommand(action) {
 }
 
 function normalizeCommand(command) {
-  return command
-    .trim()
+  return extractCommandValue(command)
     .toLowerCase()
-    .replace(/[.!?]+$/g, "")
     .replace(/\s+/g, " ");
 }
 
+function extractCommandText(text) {
+  return String(text || "")
+    .normalize("NFKC")
+    .replace(/[\u201c\u201d\u201e\u201f]/g, '"')
+    .replace(/[\u2018\u2019\u201a\u201b`]/g, "'")
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
+    .replace(/^[\s.,!?;:]+|[\s.,!?;:]+$/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function extractCommandValue(text) {
+  return extractCommandText(text)
+    .replace(/["']/g, "")
+    .replace(/[.,!?;:()[\]{}]+/g, " ")
+    .replace(/[-_/]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function matchesCommand(normalizedCommand, commands) {
-  return commands.some((command) => normalizedCommand === command);
+  return commands.some((command) => normalizedCommand === normalizeCommand(command));
 }
 
 function commandRemainder(command, prefixes) {
-  for (const prefix of prefixes) {
-    const pattern = new RegExp(`^${escapeRegex(prefix)}[\\s,:-]+(.+)$`, "i");
-    const match = command.trim().match(pattern);
+  const cleaned = extractCommandText(command);
+  const normalizedCommand = normalizeCommand(cleaned);
 
-    if (match?.[1]?.trim()) {
-      return match[1].trim();
+  for (const prefix of prefixes) {
+    const normalizedPrefix = normalizeCommand(prefix);
+    const prefixWords = normalizedPrefix.split(" ").filter(Boolean);
+
+    if (!prefixWords.length) {
+      continue;
+    }
+
+    if (normalizedCommand.startsWith(`${normalizedPrefix} `)) {
+      const value = cleaned.split(/\s+/).slice(prefixWords.length).join(" ");
+      const cleanedValue = extractCommandValue(value);
+
+      if (cleanedValue) {
+        return cleanedValue;
+      }
     }
   }
 
   return null;
-}
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function waitForVoices() {
@@ -1368,7 +1856,7 @@ async function speakWithServer(text, label, detail, stopToken) {
       return "stopped";
     }
 
-    const response = await fetch(api.synthesize, {
+    const response = await apiFetch(api.synthesize, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
@@ -1508,11 +1996,16 @@ async function sendTranscript(source = "manual") {
     return;
   }
 
+  if (source === "manual" && commandModeToggle.checked) {
+    await sendDraftCommand(text);
+    return;
+  }
+
   const detail = source === "auto" ? "Auto Send" : "Desktop handoff";
   setState("processing", "Sending", detail);
 
   try {
-    const response = await fetch(api.sendCommand, {
+    const response = await apiFetch(api.sendCommand, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1539,6 +2032,38 @@ async function sendTranscript(source = "manual") {
   } catch (error) {
     addMessage(error.message || "Desktop command route is not connected.", "warning");
     setState("idle", "Ready", "Desktop route pending");
+  }
+}
+
+async function sendDraftCommand(text) {
+  const command = extractCommandText(text);
+
+  if (!command) {
+    addMessage("No command.", "system");
+    setState("idle", "Ready", "No command");
+    return;
+  }
+
+  const parts = splitCommandComposition(command);
+  const actions = parts.map((part) => parseSingleVoiceCommand(part));
+
+  if (!actions.every(Boolean)) {
+    addMessage(`Command not recognized: ${command}`, "warning");
+    setState("idle", "Ready", "Command not recognized");
+    return;
+  }
+
+  if (actions.some((action) => action.type === "send")) {
+    addMessage("Commands are on. Turn Commands off to send the draft as a message.", "warning");
+    setState("idle", "Ready", "Commands are on");
+    return;
+  }
+
+  addMessage(command, "user");
+  setDraftText("");
+
+  for (const action of actions) {
+    await applySingleVoiceCommand(action);
   }
 }
 
@@ -1574,6 +2099,9 @@ responseAudioToggle.addEventListener("change", async () => {
   await unlockAudioOutput();
   setResponseAudio(responseAudioToggle.checked);
 });
+commandModeToggle.addEventListener("change", () => {
+  setState("idle", "Ready", commandModeToggle.checked ? "Text commands on" : "Text messages on");
+});
 echoToggle.addEventListener("change", async () => {
   await unlockAudioOutput();
 
@@ -1588,12 +2116,12 @@ echoToggle.addEventListener("change", async () => {
     setState("idle", "Ready", previousDetail || "Local Dictate ready");
   }
 });
-setInitialSpeechMode();
-loadAgentTarget();
-startAgentEventPolling();
-resizeDraft();
+pinForm.addEventListener("submit", unlockWithPin);
+boot();
 
 window.addEventListener("pagehide", () => {
   stopRecording();
   mediaStream?.getTracks().forEach((track) => track.stop());
+  screenshotObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  screenshotObjectUrls = [];
 });

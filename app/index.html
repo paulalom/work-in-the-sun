@@ -7,6 +7,24 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <section class="pin-gate" id="pinGate" hidden>
+      <form class="pin-panel" id="pinForm" autocomplete="off">
+        <p class="kicker">Work in the Sun</p>
+        <h2>Enter PIN</h2>
+        <label class="sr-only" for="pinInput">Access PIN</label>
+        <input
+          id="pinInput"
+          name="pin"
+          type="password"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          placeholder="PIN"
+        />
+        <button type="submit">Unlock</button>
+        <p class="pin-message" id="pinMessage" aria-live="polite"></p>
+      </form>
+    </section>
+
     <main class="app-shell">
       <header class="top-bar">
         <div>
@@ -63,6 +81,12 @@
             <input type="checkbox" id="responseAudioToggle" />
             <span class="switch" aria-hidden="true"></span>
             <span>Responses</span>
+          </label>
+
+          <label class="toggle-control">
+            <input type="checkbox" id="commandModeToggle" />
+            <span class="switch" aria-hidden="true"></span>
+            <span>Commands</span>
           </label>
         </div>
 

@@ -1,6 +1,12 @@
 const agentStore = require("./lib/agent-store");
 
 const PROTOCOL_VERSION = "2025-03-26";
+const MAX_MCP_MESSAGE_BYTES = finitePositiveNumber(process.env.WITS_MCP_MESSAGE_BYTES, 256 * 1024);
+
+function finitePositiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
 
 const tools = [
   {
@@ -260,6 +266,13 @@ let buffer = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   buffer += chunk;
+
+  if (Buffer.byteLength(buffer) > MAX_MCP_MESSAGE_BYTES) {
+    buffer = "";
+    writeMessage(failure(null, -32600, "Request is too large."));
+    return;
+  }
+
   const lines = buffer.split(/\r?\n/);
   buffer = lines.pop() || "";
 

@@ -1,10 +1,10 @@
 param(
-  [ValidateSet("send", "read")]
+  [ValidateSet("send", "read", "screenshot")]
   [string]$Action = "send",
   [string]$Text = "",
   [string]$TargetLabel = "",
-  [bool]$Submit = $true,
-  [bool]$Highlight = $true,
+  [string]$Submit = "true",
+  [string]$Highlight = "true",
   [int]$MaxChars = 20000
 )
 
@@ -19,6 +19,14 @@ Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public static class User32Bridge {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct RECT {
+    public int Left;
+    public int Top;
+    public int Right;
+    public int Bottom;
+  }
+
   [DllImport("user32.dll")]
   public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")]
@@ -27,12 +35,36 @@ public static class User32Bridge {
   public static extern bool SetCursorPos(int X, int Y);
   [DllImport("user32.dll")]
   public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+  [DllImport("user32.dll")]
+  public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+  [DllImport("user32.dll")]
+  public static extern bool SetProcessDPIAware();
+  [DllImport("dwmapi.dll")]
+  public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
 }
 "@
 
 $MouseLeftDown = 0x0002
 $MouseLeftUp = 0x0004
 $ShowRestore = 9
+$DwmwaExtendedFrameBounds = 9
+
+function Convert-BridgeBoolean {
+  param([string]$Value, [bool]$Default)
+
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    return $Default
+  }
+
+  switch ($Value.Trim().ToLowerInvariant()) {
+    { $_ -in @("1", "true", "`$true", "yes", "on") } { return $true }
+    { $_ -in @("0", "false", "`$false", "no", "off") } { return $false }
+    default { throw "Invalid boolean value: $Value" }
+  }
+}
+
+$Submit = Convert-BridgeBoolean $Submit $true
+$Highlight = Convert-BridgeBoolean $Highlight $true
 
 function Write-JsonResult {
   param($Value)
@@ -88,6 +120,71 @@ function Get-ElementInfo {
       width = [int][Math]::Max(0, [Math]::Min(2147483647, $rect.Width))
       height = [int][Math]::Max(0, [Math]::Min(2147483647, $rect.Height))
     }
+  }
+}
+
+function Get-WindowBounds {
+  param([IntPtr]$Handle)
+
+  $rect = New-Object User32Bridge+RECT
+  $rectSize = [Runtime.InteropServices.Marshal]::SizeOf([type][User32Bridge+RECT])
+  $dwmResult = [User32Bridge]::DwmGetWindowAttribute(
+    $Handle,
+    $DwmwaExtendedFrameBounds,
+    [ref]$rect,
+    $rectSize
+  )
+
+  if ($dwmResult -ne 0 -or ($rect.Right -le $rect.Left) -or ($rect.Bottom -le $rect.Top)) {
+    if (-not [User32Bridge]::GetWindowRect($Handle, [ref]$rect)) {
+      throw "Codex window bounds could not be read."
+    }
+  }
+
+  $width = [Math]::Max(0, $rect.Right - $rect.Left)
+  $height = [Math]::Max(0, $rect.Bottom - $rect.Top)
+
+  if ($width -lt 1 -or $height -lt 1) {
+    throw "Codex window has no visible area."
+  }
+
+  [pscustomobject]@{
+    x = [int]$rect.Left
+    y = [int]$rect.Top
+    width = [int]$width
+    height = [int]$height
+  }
+}
+
+function Capture-WindowImage {
+  param([IntPtr]$Handle)
+
+  $bounds = Get-WindowBounds $Handle
+  $bitmap = New-Object System.Drawing.Bitmap $bounds.width, $bounds.height
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  $stream = New-Object System.IO.MemoryStream
+
+  try {
+    $graphics.CopyFromScreen(
+      $bounds.x,
+      $bounds.y,
+      0,
+      0,
+      (New-Object System.Drawing.Size $bounds.width, $bounds.height),
+      [System.Drawing.CopyPixelOperation]::SourceCopy
+    )
+    $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+
+    [pscustomobject]@{
+      bounds = $bounds
+      width = $bounds.width
+      height = $bounds.height
+      imageBase64 = [Convert]::ToBase64String($stream.ToArray())
+    }
+  } finally {
+    $stream.Dispose()
+    $graphics.Dispose()
+    $bitmap.Dispose()
   }
 }
 
@@ -313,6 +410,8 @@ function Restore-Clipboard {
 }
 
 try {
+  [User32Bridge]::SetProcessDPIAware() | Out-Null
+
   $window = Get-CodexWindow
   [User32Bridge]::ShowWindow([IntPtr]$window.Process.MainWindowHandle, $ShowRestore) | Out-Null
   [User32Bridge]::SetForegroundWindow([IntPtr]$window.Process.MainWindowHandle) | Out-Null
@@ -326,6 +425,27 @@ try {
       windowTitle = $window.Process.MainWindowTitle
       chatTitle = Get-VisibleChatTitle $window.Root
       text = $documentText
+    })
+    exit 0
+  }
+
+  if ($Action -eq "screenshot") {
+    $chatTitle = Select-TargetChat $window.Root $TargetLabel
+    Start-Sleep -Milliseconds 250
+    $capture = Capture-WindowImage ([IntPtr]$window.Process.MainWindowHandle)
+
+    Write-JsonResult ([pscustomobject]@{
+      ok = $true
+      action = "screenshot"
+      windowTitle = $window.Process.MainWindowTitle
+      chatTitle = $chatTitle
+      targetLabel = $TargetLabel
+      processName = $window.Process.ProcessName
+      mimeType = "image/png"
+      width = $capture.width
+      height = $capture.height
+      bounds = $capture.bounds
+      imageBase64 = $capture.imageBase64
     })
     exit 0
   }
