@@ -76,10 +76,11 @@ Hold the command button and say:
 - `list work in the sun`
 - `list chats in work in the sun`
 - `continue`
+- `use one`
 - `use listed one`
 - `screenshot`
 
-`list` asks whether to list projects or chats. `list projects` reads Codex desktop project roots. `list chats` reads recent Codex chats in pages of five, ordered by last use. A project phrase after `list`, such as `list work in the sun`, lists chats for that project. Chat results are read as project first, then chat title, so a global result sounds like `Work in the Sun: Add agent chat support`. `continue` reads the next page of chats when more are available. `use listed one` or `use listed two` sets the active target to a chat from the most recently listed page.
+`list` asks whether to list projects or chats. `list projects` reads Codex desktop project roots. `list chats` reads recent Codex chats in pages of five, ordered by last use. A project phrase after `list`, such as `list work in the sun`, lists chats for that project. Chat results are read as project first, then chat title, so a global result sounds like `Work in the Sun: Add agent chat support`. `continue` reads the next page of chats when more are available. `use one`, `use listed one`, or `use listed two` sets the active target to a chat from the most recently listed page.
 
 `screenshot` captures only the active desktop window and shows the image in the remote UI. When the active target is a Codex chat, the bridge brings Codex forward and selects the target chat before capturing the Codex window.
 

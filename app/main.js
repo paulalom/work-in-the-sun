@@ -88,7 +88,7 @@ const commandHelp = [
   "list work in the sun",
   "list chats in work in the sun",
   "continue",
-  "use listed one",
+  "use one / use listed one",
   "screenshot",
   "use codex work in the sun agent chat",
   "use codex work in the sun new",
@@ -864,6 +864,7 @@ function parseUseListedCommand(command) {
     "use listed",
     "use list",
     "use number",
+    "use",
     "select listed chat",
     "select listed",
     "select number",
@@ -1113,7 +1114,7 @@ function listedChatTarget(item) {
 async function useListedChat(number) {
   if (!number) {
     addMessage("Which listed chat should I use?", "warning");
-    setState("idle", "Ready", "Say use listed one");
+    setState("idle", "Ready", "Say use one");
     return;
   }
 
