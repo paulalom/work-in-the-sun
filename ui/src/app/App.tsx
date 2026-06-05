@@ -49,6 +49,8 @@ const BrowserSpeechRecognition =
 const useBrowserSpeechDemo =
   typeof window !== "undefined" && new URLSearchParams(window.location.search).has("browserSpeechDemo");
 const prefersServerTts = typeof navigator !== "undefined" && navigator.userAgent.includes("Firefox");
+const MIN_BROWSER_TTS_WATCHDOG_MS = 3500;
+const MAX_BROWSER_TTS_WATCHDOG_MS = 60000;
 const THREAD_ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const RECENT_THREAD_LIMIT = 8;
 const GLOBAL_FEED_KEY = "global";
@@ -1659,12 +1661,23 @@ export function App() {
       utterance.rate = 1;
       utterance.pitch = 1;
       utterance.volume = 1;
+      let settled = false;
+      let started = false;
 
-      const timeout = window.setTimeout(() => {
-        finish(false);
-      }, Math.max(3500, Math.min(12000, text.length * 70)));
+      const timeout = window.setTimeout(
+        () => {
+          const speechState = window.speechSynthesis;
+          finish(started || speechState?.speaking || speechState?.pending ? true : false);
+        },
+        Math.max(MIN_BROWSER_TTS_WATCHDOG_MS, Math.min(MAX_BROWSER_TTS_WATCHDOG_MS, text.length * 90)),
+      );
 
       function finish(result: SpeechResult) {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
         window.clearTimeout(timeout);
 
         if (activeUtteranceRef.current === utterance) {
@@ -1679,7 +1692,10 @@ export function App() {
       }
 
       activeSpeechFinishRef.current = finish;
-      utterance.addEventListener("start", () => setWorkStatus("speaking", label, detail));
+      utterance.addEventListener("start", () => {
+        started = true;
+        setWorkStatus("speaking", label, detail);
+      });
       utterance.addEventListener("end", () => finish(true), { once: true });
       utterance.addEventListener("error", () => finish(false), { once: true });
       window.speechSynthesis.speak(utterance);
