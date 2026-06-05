@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { List, Mic, Send, Square, TerminalSquare } from "lucide-react";
+import { List, LoaderCircle, Menu, Mic, Send, Square } from "lucide-react";
 import { PointerEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   commandHelp,
@@ -22,17 +22,19 @@ import {
 } from "../features/session/sessionCrypto";
 import { createApiClient } from "../shared/api/client";
 import type {
+  AgentEvent,
   AgentTarget,
   CatalogChat,
   FeedMessage,
   FeedMessageType,
   ListedChat,
   ListContext,
+  ScreenshotMeta,
   WorkStatus,
   CaptureMode,
 } from "../shared/types";
 
-const MAX_FEED_MESSAGES = 80;
+const MAX_FEED_MESSAGES_PER_THREAD = 30;
 const MAX_FEED_MESSAGE_CHARS = 1200;
 const FEED_TRUNCATION_SUFFIX = "...";
 const DEFAULT_TARGET_LABEL = "Desktop agent";
@@ -47,6 +49,11 @@ const BrowserSpeechRecognition =
 const useBrowserSpeechDemo =
   typeof window !== "undefined" && new URLSearchParams(window.location.search).has("browserSpeechDemo");
 const prefersServerTts = typeof navigator !== "undefined" && navigator.userAgent.includes("Firefox");
+const THREAD_ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const RECENT_THREAD_LIMIT = 8;
+const GLOBAL_FEED_KEY = "global";
+const UNCATEGORIZED_THREAD_LABEL = "Uncategorized";
+const TARGET_SWITCH_NOTICE_PATTERN = /^Using .+\.$/;
 
 type SpeechResult = true | false | "stopped";
 
@@ -77,6 +84,129 @@ interface SpeechRecognitionErrorEventLike extends Event {
   error?: string;
 }
 
+function threadIdFromTarget(target?: AgentTarget | null) {
+  const candidates = [target?.sessionHint, target?.id, target?.route, target?.label].filter(Boolean).map(String);
+
+  for (const candidate of candidates) {
+    const match = candidate.match(THREAD_ID_PATTERN);
+
+    if (match) {
+      return match[0];
+    }
+  }
+
+  return "";
+}
+
+function normalizeFeedKeyPart(value?: string) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "default";
+}
+
+function isCurrentTarget(target?: AgentTarget | null) {
+  return [target?.route, target?.sessionHint, target?.label].some((value) => /^current$/i.test(String(value || "")));
+}
+
+function feedKeyFromTarget(target?: AgentTarget | null) {
+  if (!target) {
+    return GLOBAL_FEED_KEY;
+  }
+
+  const provider = normalizeFeedKeyPart(target.provider || "agent");
+  const threadId = threadIdFromTarget(target);
+
+  if (threadId) {
+    return `${provider}:thread:${threadId}`;
+  }
+
+  if (target.mode === "new") {
+    return [
+      provider,
+      "new",
+      normalizeFeedKeyPart(target.workspace || target.workspaceQuery || ""),
+      normalizeFeedKeyPart(target.route || target.sessionHint || target.label || "new"),
+    ].join(":");
+  }
+
+  if (isCurrentTarget(target)) {
+    return `${provider}:current`;
+  }
+
+  return [
+    provider,
+    "route",
+    normalizeFeedKeyPart(target.workspace || ""),
+    normalizeFeedKeyPart(target.route || target.sessionHint || target.label || "current"),
+  ].join(":");
+}
+
+function feedKeyFromMessage(message: FeedMessage) {
+  return message.feedKey || GLOBAL_FEED_KEY;
+}
+
+function pruneFeedMessages(messages: FeedMessage[]) {
+  const counts = new Map<string, number>();
+  const kept: FeedMessage[] = [];
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const feedKey = feedKeyFromMessage(message);
+    const count = counts.get(feedKey) || 0;
+
+    if (count >= MAX_FEED_MESSAGES_PER_THREAD) {
+      continue;
+    }
+
+    counts.set(feedKey, count + 1);
+    kept.push(message);
+  }
+
+  return kept.reverse();
+}
+
+function isTargetSwitchNotice(message: FeedMessage) {
+  return message.type === "system" && TARGET_SWITCH_NOTICE_PATTERN.test(message.text);
+}
+
+function withoutTargetSwitchNotices(messages: FeedMessage[]) {
+  return messages.filter((message) => !isTargetSwitchNotice(message));
+}
+
+function feedMessageCount(messages: FeedMessage[], feedKey: string) {
+  return messages.filter((message) => feedKeyFromMessage(message) === feedKey).length;
+}
+
+function formatThreadAge(value?: string) {
+  const timestamp = Date.parse(value || "");
+
+  if (!timestamp) {
+    return "";
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+
+  if (elapsedSeconds < 60) {
+    return "now";
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+
+  if (elapsedMinutes < 60) {
+    return `${elapsedMinutes}m`;
+  }
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+
+  if (elapsedHours < 24) {
+    return `${elapsedHours}h`;
+  }
+
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(timestamp));
+}
+
 export function App() {
   const initialAccess = useMemo(() => readAccessToken(), []);
   const [accessToken, setAccessToken] = useState(initialAccess.token);
@@ -103,18 +233,30 @@ export function App() {
   });
   const [messages, setMessages] = useState<FeedMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [echoEnabled, setEchoEnabled] = useState(true);
+  const [echoEnabled, setEchoEnabled] = useState(false);
   const [autoSendEnabled, setAutoSendEnabled] = useState(false);
   const [responseAudioEnabled, setResponseAudioEnabled] = useState(false);
   const [commandModeEnabled, setCommandModeEnabled] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [selectedFeedKey, setSelectedFeedKey] = useState("");
+  const [feedActivity, setFeedActivity] = useState<Record<string, { lastAnyAt?: number; lastUserAt?: number }>>({});
   const [desktopStatusTitle, setDesktopStatusTitle] = useState("Desktop connection");
   const [desktopOnline, setDesktopOnline] = useState(false);
+  const [activeAgentTarget, setActiveAgentTarget] = useState<AgentTarget | null>(null);
   const [agentTargetLabel, setAgentTargetLabel] = useState(DEFAULT_TARGET_LABEL);
+  const activeTargetFeedKey = feedKeyFromTarget(activeAgentTarget);
+  const activeFeedKey = selectedFeedKey || activeTargetFeedKey;
+  const visibleMessages = messages.filter((message) => feedKeyFromMessage(message) === activeFeedKey);
   const feedRef = useRef<HTMLElement | null>(null);
   const controlDockRef = useRef<HTMLElement | null>(null);
   const draftTextRef = useRef<HTMLTextAreaElement | null>(null);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const draftRef = useRef(draft);
   const messagesRef = useRef<FeedMessage[]>([]);
+  const activeAgentTargetRef = useRef<AgentTarget | null>(activeAgentTarget);
+  const activeTargetFeedKeyRef = useRef(activeTargetFeedKey);
+  const activeFeedKeyRef = useRef(activeFeedKey);
+  const selectedFeedKeyRef = useRef(selectedFeedKey);
   const echoRef = useRef(echoEnabled);
   const autoSendRef = useRef(autoSendEnabled);
   const responseAudioRef = useRef(responseAudioEnabled);
@@ -168,6 +310,52 @@ export function App() {
     commandModeRef.current = commandModeEnabled;
   }, [commandModeEnabled]);
 
+  useEffect(() => {
+    activeFeedKeyRef.current = activeFeedKey;
+  }, [activeFeedKey]);
+
+  useEffect(() => {
+    activeTargetFeedKeyRef.current = activeTargetFeedKey;
+  }, [activeTargetFeedKey]);
+
+  useEffect(() => {
+    selectedFeedKeyRef.current = selectedFeedKey;
+  }, [selectedFeedKey]);
+
+  useEffect(() => {
+    activeAgentTargetRef.current = activeAgentTarget;
+  }, [activeAgentTarget]);
+
+  useEffect(() => {
+    if (!settingsMenuOpen) {
+      return undefined;
+    }
+
+    function handlePointerDown(event: globalThis.PointerEvent) {
+      const target = event.target;
+
+      if (target instanceof Node && settingsMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setSettingsMenuOpen(false);
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSettingsMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [settingsMenuOpen]);
+
   const healthQuery = useQuery({
     queryKey: ["health", accessToken],
     enabled: appReady && !(useBrowserSpeechDemo && BrowserSpeechRecognition),
@@ -179,6 +367,13 @@ export function App() {
     queryKey: ["agent-target", accessToken],
     enabled: appReady,
     queryFn: () => api.getAgentTarget(),
+  });
+
+  const recentChatsQuery = useQuery({
+    queryKey: ["recent-chats", accessToken],
+    enabled: appReady,
+    refetchInterval: 10_000,
+    queryFn: () => api.fetchCatalog("chats", { limit: RECENT_THREAD_LIMIT }),
   });
 
   useEffect(() => {
@@ -288,7 +483,7 @@ export function App() {
         feed.scrollTop = feed.scrollHeight;
       });
     });
-  }, [messages]);
+  }, [messages, visibleMessages.length, activeFeedKey]);
 
   useEffect(() => {
     syncFeedBottomInset();
@@ -474,10 +669,32 @@ export function App() {
     screenshotObjectUrlsRef.current = screenshotObjectUrlsRef.current.filter((item) => item !== url);
   }
 
-  function addMessage(text: string, type: FeedMessageType = "system", options: Partial<FeedMessage> & { speak?: boolean } = {}) {
+  function recordFeedActivity(feedKey: string, messageType: FeedMessageType) {
+    const now = Date.now();
+
+    setFeedActivity((current) => {
+      const previous = current[feedKey] || {};
+
+      return {
+        ...current,
+        [feedKey]: {
+          lastAnyAt: now,
+          lastUserAt: messageType === "user" ? now : previous.lastUserAt,
+        },
+      };
+    });
+  }
+
+  function addMessage(
+    text: string,
+    type: FeedMessageType = "system",
+    options: Partial<FeedMessage> & { speak?: boolean; target?: AgentTarget | null } = {},
+  ) {
     const displayText = formatFeedMessageText(text);
+    const feedKey = options.feedKey || (options.target ? feedKeyFromTarget(options.target) : activeFeedKeyRef.current);
     const message: FeedMessage = {
       id: crypto.randomUUID(),
+      feedKey,
       type,
       text: displayText,
       dispatchStatus: options.dispatchStatus,
@@ -486,7 +703,8 @@ export function App() {
       screenshotMeta: options.screenshotMeta,
     };
 
-    setMessages((current) => [...current, message].slice(-MAX_FEED_MESSAGES));
+    setMessages((current) => pruneFeedMessages([...current, message]));
+    recordFeedActivity(feedKey, type);
 
     const shouldSpeak = options.speak ?? (responseAudioRef.current && ["system", "warning"].includes(type));
 
@@ -495,10 +713,11 @@ export function App() {
     }
   }
 
-  function addScreenshotMessage(url: string, meta = {}) {
+  function addScreenshotMessage(url: string, meta: ScreenshotMeta = {}) {
     addMessage(metaText(meta), "agent", {
       screenshotUrl: url,
       screenshotMeta: meta,
+      target: meta.target,
       speak: false,
     });
   }
@@ -579,8 +798,56 @@ export function App() {
     announceCommand(draftText ? `Draft: ${draftText}` : "Draft is empty.", detail);
   }
 
-  function renderAgentTarget(target?: AgentTarget | null) {
+  function clearTransientCommandState() {
+    activeListContextRef.current = null;
+    lastListedChatsRef.current = [];
+  }
+
+  function rekeyFeedMessages(fromFeedKey: string, toFeedKey: string) {
+    if (!fromFeedKey || !toFeedKey || fromFeedKey === toFeedKey) {
+      return;
+    }
+
+    setMessages((current) =>
+      current.map((message) => (feedKeyFromMessage(message) === fromFeedKey ? { ...message, feedKey: toFeedKey } : message)),
+    );
+    setFeedActivity((current) => {
+      const previous = current[fromFeedKey];
+
+      if (!previous) {
+        return current;
+      }
+
+      const next = { ...current };
+      const target = next[toFeedKey] || {};
+      next[toFeedKey] = {
+        lastAnyAt: Math.max(target.lastAnyAt || 0, previous.lastAnyAt || 0) || undefined,
+        lastUserAt: Math.max(target.lastUserAt || 0, previous.lastUserAt || 0) || undefined,
+      };
+      delete next[fromFeedKey];
+      return next;
+    });
+  }
+
+  function renderAgentTarget(target?: AgentTarget | null, options: { clearCommands?: boolean } = {}) {
+    const nextTarget = target || null;
+    const nextFeedKey = feedKeyFromTarget(nextTarget);
+    const previousTargetFeedKey = activeTargetFeedKeyRef.current;
     const label = String(target?.label || "").trim();
+
+    if (options.clearCommands && nextFeedKey !== activeFeedKeyRef.current) {
+      clearTransientCommandState();
+    }
+
+    if (!selectedFeedKeyRef.current || selectedFeedKeyRef.current === previousTargetFeedKey || options.clearCommands) {
+      selectedFeedKeyRef.current = nextFeedKey;
+      activeFeedKeyRef.current = nextFeedKey;
+      setSelectedFeedKey(nextFeedKey);
+    }
+
+    activeTargetFeedKeyRef.current = nextFeedKey;
+    activeAgentTargetRef.current = nextTarget;
+    setActiveAgentTarget(nextTarget);
     setAgentTargetLabel(label || DEFAULT_TARGET_LABEL);
   }
 
@@ -589,12 +856,43 @@ export function App() {
 
     try {
       const result = await api.setAgentTarget(target);
-      renderAgentTarget(result);
+      renderAgentTarget(result, { clearCommands: true });
       await queryClient.invalidateQueries({ queryKey: ["agent-target"] });
+      await queryClient.invalidateQueries({ queryKey: ["recent-chats"] });
+      setMessages(withoutTargetSwitchNotices);
       announceCommand(`Using ${result.label}.`, "Agent target updated");
     } catch (error) {
       addMessage(error instanceof Error ? error.message : "Agent target could not be updated.", "warning");
       setWorkStatus("idle", "Ready", "Agent target unchanged");
+    }
+  }
+
+  async function renameCurrentThread(title: string) {
+    const threadTitle = title.trim();
+
+    if (!threadTitle) {
+      addMessage("Rename to what?", "warning");
+      setWorkStatus("idle", "Ready", "Missing thread name");
+      return;
+    }
+
+    setWorkStatus("processing", "Renaming", "Updating thread name");
+
+    try {
+      const previousFeedKey = activeFeedKeyRef.current;
+      const result = await api.renameThread(threadTitle);
+
+      if (result.target) {
+        rekeyFeedMessages(previousFeedKey, feedKeyFromTarget(result.target));
+        renderAgentTarget(result.target);
+        await queryClient.invalidateQueries({ queryKey: ["agent-target"] });
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["recent-chats"] });
+      announceCommand(`Renamed to ${result.chat?.label || threadTitle}.`, "Thread renamed");
+    } catch (error) {
+      addMessage(error instanceof Error ? error.message : "Thread could not be renamed.", "warning");
+      setWorkStatus("idle", "Ready", "Rename failed");
     }
   }
 
@@ -603,21 +901,38 @@ export function App() {
       const result = await api.getAgentEvents(agentEventCursorRef.current);
       agentEventCursorRef.current = result.cursor ?? agentEventCursorRef.current;
       (result.events || []).forEach(handleAgentEvent);
+
+      if (result.events?.length) {
+        void queryClient.invalidateQueries({ queryKey: ["recent-chats"] });
+      }
     } catch {
       // Polling is opportunistic; health checks keep the visible status honest.
     }
   }
 
-  function handleAgentEvent(event: { text?: string; level?: string; speak?: boolean }) {
+  function handleAgentEvent(event: AgentEvent) {
     const text = String(event.text || "").trim();
 
     if (!text) {
       return;
     }
 
+    if (
+      event.target &&
+      activeAgentTargetRef.current?.mode === "new" &&
+      event.level === "system" &&
+      /^(Using |Created Codex chat )/.test(text)
+    ) {
+      renderAgentTarget(event.target);
+    }
+
     const isWarning = ["warning", "error"].includes(String(event.level || ""));
     const shouldSpeak = event.speak ?? responseAudioRef.current;
-    addMessage(text, isWarning ? "warning" : "agent", { speak: shouldSpeak });
+    addMessage(text, isWarning ? "warning" : "agent", {
+      feedKey: event.target ? undefined : GLOBAL_FEED_KEY,
+      speak: shouldSpeak,
+      target: event.target,
+    });
   }
 
   function promptListKind() {
@@ -660,8 +975,7 @@ export function App() {
     return `${number}. ${prefix}${chat.label}`;
   }
 
-  function listedChatTarget(item: ListedChat): AgentTarget {
-    const chat = item.chat;
+  function chatTarget(chat: CatalogChat): AgentTarget {
     const project = chat.projectLabel || "";
 
     return {
@@ -673,6 +987,22 @@ export function App() {
       mode: "existing",
       route: chat.label,
     };
+  }
+
+  function listedChatTarget(item: ListedChat): AgentTarget {
+    return chatTarget(item.chat);
+  }
+
+  async function useRecentChat(chat: CatalogChat) {
+    await setAgentTarget(chatTarget(chat));
+  }
+
+  function useUncategorizedFeed() {
+    clearTransientCommandState();
+    activeFeedKeyRef.current = GLOBAL_FEED_KEY;
+    selectedFeedKeyRef.current = GLOBAL_FEED_KEY;
+    setSelectedFeedKey(GLOBAL_FEED_KEY);
+    setWorkStatus("idle", "Ready", UNCATEGORIZED_THREAD_LABEL);
   }
 
   async function useListedChat(number: number | null) {
@@ -1139,6 +1469,10 @@ export function App() {
         return;
       }
 
+      case "renameThread":
+        await renameCurrentThread(action.title);
+        return;
+
       case "help":
         showCommandHelp();
         return;
@@ -1485,8 +1819,9 @@ export function App() {
       const statusText = queued ? "Queued" : "Sent";
       const dispatchStatus = queued ? "queued" : "sent";
       const dispatchLabel = queued ? "Queued for agent" : "Sent to agent";
-      addMessage(text, "user", { dispatchStatus, dispatchLabel });
+      addMessage(text, "user", { dispatchStatus, dispatchLabel, target });
       renderAgentTarget(target);
+      void queryClient.invalidateQueries({ queryKey: ["recent-chats"] });
       setDraftText("");
       setWorkStatus("idle", "Ready", statusText);
     } catch (error) {
@@ -1575,6 +1910,35 @@ export function App() {
     setResponseAudio(checked);
   }
 
+  const recentChats = recentChatsQuery.data?.chats || [];
+  const workingThreadCount = recentChats.filter((chat) => chat.busy).length;
+  const uncategorizedCount = feedMessageCount(messages, GLOBAL_FEED_KEY);
+  const uncategorizedActivity = feedActivity[GLOBAL_FEED_KEY] || {};
+  const threadItems = [
+    ...recentChats.map((chat, index) => {
+      const feedKey = feedKeyFromTarget(chatTarget(chat));
+      const activity = feedActivity[feedKey] || {};
+
+      return {
+        kind: "chat" as const,
+        chat,
+        feedKey,
+        order: index,
+        sortAt:
+          activity.lastUserAt ||
+          Date.parse(chat.lastCommandAt || "") ||
+          Date.parse(chat.updatedAt || "") ||
+          0,
+      };
+    }),
+    {
+      kind: "uncategorized" as const,
+      feedKey: GLOBAL_FEED_KEY,
+      messageCount: uncategorizedCount,
+      order: recentChats.length + 1,
+      sortAt: uncategorizedActivity.lastAnyAt || 0,
+    },
+  ].sort((left, right) => right.sortAt - left.sortAt || left.order - right.order);
   const statusSummary = [status.label, status.detail].filter(Boolean).join(": ");
   const appClassName = [
     "app-shell",
@@ -1614,6 +1978,42 @@ export function App() {
               <p className="state-label">{status.label}</p>
               <p className="state-detail">{status.detail}</p>
             </section>
+            <div className="settings-menu" ref={settingsMenuRef}>
+              <button
+                className={`settings-button icon-button ${settingsMenuOpen ? "is-active" : ""}`}
+                type="button"
+                aria-label="Settings"
+                title="Settings"
+                aria-haspopup="true"
+                aria-expanded={settingsMenuOpen}
+                onClick={() => setSettingsMenuOpen((open) => !open)}
+              >
+                <Menu aria-hidden="true" />
+              </button>
+
+              {settingsMenuOpen ? (
+                <div className="settings-panel" aria-label="Settings">
+                  <ToggleControl label="Echo" checked={echoEnabled} onChange={handleEchoChange} />
+                  <ToggleControl
+                    label="Auto Send"
+                    checked={autoSendEnabled}
+                    onChange={(checked) => {
+                      setAutoSendEnabled(checked);
+                      setWorkStatus("idle", "Ready", checked ? "Auto Send on" : "Auto Send off");
+                    }}
+                  />
+                  <ToggleControl label="Responses" checked={responseAudioEnabled} onChange={handleResponseAudioChange} />
+                  <ToggleControl
+                    label="Commands"
+                    checked={commandModeEnabled}
+                    onChange={(checked) => {
+                      setCommandModeEnabled(checked);
+                      setWorkStatus("idle", "Ready", checked ? "Text commands on" : "Text messages on");
+                    }}
+                  />
+                </div>
+              ) : null}
+            </div>
           </div>
         </header>
 
@@ -1622,8 +2022,79 @@ export function App() {
           <strong>{agentTargetLabel}</strong>
         </section>
 
+        <section className="thread-strip" aria-label="Recent chats">
+          <div className="thread-strip-head">
+            <span>Threads</span>
+            {workingThreadCount ? (
+              <strong>{workingThreadCount} working</strong>
+            ) : (
+              <span>{recentChatsQuery.isFetching ? "Syncing" : "Recent"}</span>
+            )}
+          </div>
+
+          <div className="thread-list">
+            {threadItems.map((item) => {
+              const isActive = activeFeedKey === item.feedKey;
+
+              if (item.kind === "uncategorized") {
+                const meta = item.messageCount ? `${item.messageCount} message${item.messageCount === 1 ? "" : "s"}` : "Global feed";
+
+                return (
+                  <button
+                    className={`thread-button ${isActive ? "is-active" : ""}`}
+                    key={item.feedKey}
+                    type="button"
+                    title={UNCATEGORIZED_THREAD_LABEL}
+                    aria-label={`${UNCATEGORIZED_THREAD_LABEL}. ${meta}`}
+                    onClick={useUncategorizedFeed}
+                  >
+                    <span className="thread-dot" aria-hidden="true" />
+                    <span className="thread-copy">
+                      <span className="thread-title">{UNCATEGORIZED_THREAD_LABEL}</span>
+                      <span className="thread-meta">{meta}</span>
+                    </span>
+                    {item.messageCount ? <span className="thread-badge">{item.messageCount}</span> : null}
+                  </button>
+                );
+              }
+
+              const chat = item.chat;
+              const age = formatThreadAge(chat.lastCommandAt || chat.updatedAt);
+              const meta = [chat.projectLabel, age].filter(Boolean).join(" - ");
+              const title = chat.projectLabel ? `${chat.projectLabel} / ${chat.label}` : chat.label;
+
+              return (
+                <button
+                  className={`thread-button ${isActive ? "is-active" : ""} ${chat.busy ? "is-busy" : ""}`}
+                  key={chat.id}
+                  type="button"
+                  title={title}
+                  aria-label={`${title}. ${chat.busy ? "Agent still working" : "Idle"}`}
+                  onClick={() => void useRecentChat(chat)}
+                >
+                  <span className={`thread-dot ${chat.busy ? "is-busy" : ""}`} aria-hidden="true" />
+                  <span className="thread-copy">
+                    <span className="thread-title">{chat.label}</span>
+                    {meta ? (
+                      <span className="thread-meta">
+                        {chat.lastCommandAt || chat.updatedAt ? <time dateTime={chat.lastCommandAt || chat.updatedAt}>{meta}</time> : meta}
+                      </span>
+                    ) : null}
+                  </span>
+                  {chat.busy ? (
+                    <span className="thread-badge">
+                      <LoaderCircle aria-hidden="true" />
+                      <span>Working</span>
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         <section className="feed" aria-label="Session" ref={feedRef}>
-          {messages.map((message) => (
+          {visibleMessages.map((message) => (
             <article
               className={[
                 "message",
@@ -1674,28 +2145,6 @@ export function App() {
               onKeyDown={handleDraftKeyDown}
             />
           </div>
-
-          <div className="toggle-row">
-            <ToggleControl label="Echo" checked={echoEnabled} onChange={handleEchoChange} />
-            <ToggleControl
-              label="Auto Send"
-              checked={autoSendEnabled}
-              onChange={(checked) => {
-                setAutoSendEnabled(checked);
-                setWorkStatus("idle", "Ready", checked ? "Auto Send on" : "Auto Send off");
-              }}
-            />
-            <ToggleControl label="Responses" checked={responseAudioEnabled} onChange={handleResponseAudioChange} />
-            <ToggleControl
-              label="Commands"
-              checked={commandModeEnabled}
-              onChange={(checked) => {
-                setCommandModeEnabled(checked);
-                setWorkStatus("idle", "Ready", checked ? "Text commands on" : "Text messages on");
-              }}
-            />
-          </div>
-
           <div className="button-row">
             <button
               className={`command-button icon-button ${status.state === "listening" && status.mode === "command" ? "is-active" : ""}`}

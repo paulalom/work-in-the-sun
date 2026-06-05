@@ -75,6 +75,13 @@ describe("command parser", () => {
     });
   });
 
+  it("parses thread rename commands", () => {
+    expect(parseSingleVoiceCommand("rename to ui style")).toEqual({
+      type: "renameThread",
+      title: "ui style",
+    });
+  });
+
   it("uses choice context for project or chat answers", () => {
     expect(parseSingleVoiceCommand("projects", { activeListContext: { kind: "choices" } })).toEqual({
       type: "listProjects",

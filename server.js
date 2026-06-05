@@ -1082,6 +1082,36 @@ async function updateAgentTarget(request, response) {
   json(response, 200, { target });
 }
 
+function targetForRenamedChat(previousTarget = {}, chat = {}) {
+  const label = chat.projectLabel ? `${chat.projectLabel} / ${chat.label}` : `Codex / ${chat.label}`;
+
+  return {
+    ...previousTarget,
+    id: `codex:${chat.id}`,
+    provider: "codex",
+    label,
+    workspace: chat.workspace || previousTarget.workspace,
+    sessionHint: chat.id,
+    mode: "existing",
+    route: chat.label,
+  };
+}
+
+async function renameAgentThread(request, response) {
+  checkRateLimit(request, "command", COMMAND_RATE_LIMIT);
+  const body = await readJson(request, MAX_JSON_BYTES);
+
+  try {
+    const activeTarget = await agentStore.getActiveTarget();
+    const chat = await codexCatalog.renameChat(activeTarget, body.title || body.name || body.label);
+    const target = await agentStore.setActiveTarget(targetForRenamedChat(activeTarget, chat));
+
+    json(response, 200, { chat, target });
+  } catch (error) {
+    json(response, 400, { error: error.message || "Thread could not be renamed." });
+  }
+}
+
 async function queueAgentCommand(request, response) {
   checkRateLimit(request, "command", COMMAND_RATE_LIMIT);
   const body = await readJson(request, MAX_JSON_BYTES);
@@ -1364,6 +1394,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/agent/target") {
       await updateAgentTarget(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/agent/thread/rename") {
+      await renameAgentThread(request, response);
       return;
     }
 

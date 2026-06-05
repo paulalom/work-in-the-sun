@@ -5,6 +5,7 @@ import type {
   CatalogChatResponse,
   CatalogProjectResponse,
   HealthStatus,
+  RenameThreadResponse,
   SessionStatus,
   ScreenshotMeta,
 } from "../types";
@@ -17,6 +18,7 @@ export const apiRoutes = {
   sendCommand: "/api/agent/commands",
   screenshot: "/api/screenshot/active-window",
   target: "/api/agent/target",
+  renameThread: "/api/agent/thread/rename",
   events: "/api/agent/events",
   catalog: "/api/agent/catalog",
   health: "/api/health",
@@ -36,6 +38,7 @@ export interface ApiClient {
   transcribe(audio: Blob, metadata: { durationMs: number; mimeType?: string }): Promise<{ text: string; blank: boolean }>;
   synthesize(text: string): Promise<ArrayBuffer | null>;
   sendCommand(body: { text: string; input: string; source: string; echo: boolean }): Promise<AgentCommandResponse>;
+  renameThread(title: string): Promise<RenameThreadResponse>;
 }
 
 export interface CatalogOptions {
@@ -117,6 +120,20 @@ export function createApiClient(getAccessToken: () => string): ApiClient {
 
       const result = await readJson<{ target: AgentTarget }>(response);
       return result.target;
+    },
+
+    async renameThread(title) {
+      const response = await apiFetch(apiRoutes.renameThread, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+
+      if (!response.ok) {
+        throw await responseError(response, "Thread could not be renamed.");
+      }
+
+      return readJson<RenameThreadResponse>(response);
     },
 
     async getAgentEvents(after, limit) {

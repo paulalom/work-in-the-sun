@@ -21,6 +21,7 @@ export const commandHelp = [
   "use work in the sun new",
   "stop audio",
   "read draft",
+  "rename to ...",
   "append ...",
   "prepend ...",
   "replace with ...",
@@ -42,6 +43,7 @@ export type VoiceCommandAction =
   | { type: "commandModeOff" }
   | { type: "stopAudio" }
   | { type: "readDraft" }
+  | { type: "renameThread"; title: string }
   | { type: "help" }
   | { type: "listPrompt" }
   | { type: "listProjects" }
@@ -103,6 +105,12 @@ export function parseSingleVoiceCommand(command: string, context: CommandParseCo
 
   if (projectChatList) {
     return { type: "listChats", project: projectChatList };
+  }
+
+  const renameTitle = commandRemainder(cleaned, ["rename to", "rename thread to", "rename chat to"]);
+
+  if (renameTitle !== null) {
+    return { type: "renameThread", title: renameTitle };
   }
 
   const commandGroups: Array<{ type: VoiceCommandAction["type"]; commands: string[] }> = [

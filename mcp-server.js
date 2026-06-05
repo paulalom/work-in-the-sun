@@ -200,11 +200,15 @@ function conciseReplyInstructions(preferences) {
 async function callTool(name, args = {}) {
   switch (name) {
     case "send_feedback": {
+      const target = args.targetId
+        ? undefined
+        : await agentStore.getActiveTarget().catch(() => undefined);
       const event = await agentStore.appendEvent({
         text: args.text,
         level: args.level,
         commandId: args.commandId,
         targetId: args.targetId,
+        target,
         speak: args.speak,
         source: "mcp",
       });

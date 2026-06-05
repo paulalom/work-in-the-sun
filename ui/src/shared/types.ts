@@ -8,6 +8,7 @@ export type DispatchStatus = "queued" | "sent";
 
 export interface FeedMessage {
   id: string;
+  feedKey?: string;
   type: FeedMessageType;
   text: string;
   dispatchStatus?: DispatchStatus;
@@ -76,6 +77,8 @@ export interface HealthStatus {
 export interface AgentEvent {
   text?: string;
   level?: "progress" | "result" | "system" | "warning" | "error";
+  commandId?: string;
+  target?: AgentTarget;
   speak?: boolean;
 }
 
@@ -98,6 +101,11 @@ export interface AgentCommandResponse {
   };
 }
 
+export interface RenameThreadResponse {
+  chat?: CatalogChat;
+  target?: AgentTarget;
+}
+
 export interface ScreenshotMeta {
   capturedAt?: string;
   windowTitle?: string;
@@ -118,7 +126,11 @@ export interface CatalogChat {
   id: string;
   label: string;
   projectLabel?: string;
+  updatedAt?: string;
   workspace?: string;
+  busy?: boolean;
+  lastCommandAt?: string;
+  lastEventAt?: string;
 }
 
 export interface CatalogProjectResponse {
