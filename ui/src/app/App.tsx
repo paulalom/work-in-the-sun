@@ -240,6 +240,7 @@ export function App() {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [selectedFeedKey, setSelectedFeedKey] = useState("");
   const [feedActivity, setFeedActivity] = useState<Record<string, { lastAnyAt?: number; lastUserAt?: number }>>({});
+  const [threadOrder, setThreadOrder] = useState<Record<string, number>>({});
   const [desktopStatusTitle, setDesktopStatusTitle] = useState("Desktop connection");
   const [desktopOnline, setDesktopOnline] = useState(false);
   const [activeAgentTarget, setActiveAgentTarget] = useState<AgentTarget | null>(null);
@@ -257,6 +258,7 @@ export function App() {
   const activeTargetFeedKeyRef = useRef(activeTargetFeedKey);
   const activeFeedKeyRef = useRef(activeFeedKey);
   const selectedFeedKeyRef = useRef(selectedFeedKey);
+  const nextThreadOrderRef = useRef(0);
   const echoRef = useRef(echoEnabled);
   const autoSendRef = useRef(autoSendEnabled);
   const responseAudioRef = useRef(responseAudioEnabled);
@@ -375,6 +377,33 @@ export function App() {
     refetchInterval: 10_000,
     queryFn: () => api.fetchCatalog("chats", { limit: RECENT_THREAD_LIMIT }),
   });
+
+  useEffect(() => {
+    const chats = recentChatsQuery.data?.chats || [];
+
+    if (!chats.length) {
+      return;
+    }
+
+    setThreadOrder((current) => {
+      let changed = false;
+      const next = { ...current };
+
+      for (const chat of chats) {
+        const feedKey = feedKeyFromTarget(chatTarget(chat));
+
+        if (next[feedKey] !== undefined) {
+          continue;
+        }
+
+        next[feedKey] = nextThreadOrderRef.current;
+        nextThreadOrderRef.current += 1;
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [recentChatsQuery.data?.chats]);
 
   useEffect(() => {
     if (!healthQuery.data) {
@@ -1923,19 +1952,15 @@ export function App() {
         kind: "chat" as const,
         chat,
         feedKey,
-        order: index,
-        sortAt:
-          activity.lastUserAt ||
-          Date.parse(chat.lastCommandAt || "") ||
-          Date.parse(chat.updatedAt || "") ||
-          0,
+        order: threadOrder[feedKey] ?? index,
+        sortAt: activity.lastUserAt || Date.parse(chat.lastCommandAt || "") || 0,
       };
     }),
     {
       kind: "uncategorized" as const,
       feedKey: GLOBAL_FEED_KEY,
       messageCount: uncategorizedCount,
-      order: recentChats.length + 1,
+      order: Number.MAX_SAFE_INTEGER,
       sortAt: uncategorizedActivity.lastAnyAt || 0,
     },
   ].sort((left, right) => right.sortAt - left.sortAt || left.order - right.order);
