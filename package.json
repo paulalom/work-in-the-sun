@@ -1,12 +1,19 @@
 {
   "name": "work-in-the-sun",
   "version": "0.1.0",
+  "description": "Speech-first remote AI development control surface with text, visual status, and screenshots as fallback review paths.",
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "dev": "node server.js",
+    "dev": "npm run ui:build && node server.js",
+    "ui:dev": "vite --config ui/vite.config.ts --host 127.0.0.1 --port 38174",
+    "ui:build": "vite build --config ui/vite.config.ts",
+    "ui:preview": "vite preview --config ui/vite.config.ts --host 127.0.0.1 --port 38174",
+    "typecheck": "tsc --project ui/tsconfig.json --noEmit",
+    "test": "vitest --config ui/vite.config.ts",
+    "test:run": "vitest run --config ui/vite.config.ts",
     "mcp": "node mcp-server.js",
-    "check": "node --check server.js && node --check app/main.js && node --check lib/agent-store.js && node --check lib/codex-bridge.js && node --check lib/codex-catalog.js && node --check lib/window-screenshot.js && node --check mcp-server.js",
+    "check": "npm run typecheck && npm run test:run && npm run ui:build && node --check server.js && node --check lib/agent-store.js && node --check lib/codex-bridge.js && node --check lib/codex-catalog.js && node --check lib/window-screenshot.js && node --check mcp-server.js",
     "service:run": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/backend-service-runner.ps1",
     "service:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-backend-service.ps1",
     "service:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-backend-service.ps1 -Action Uninstall",
@@ -14,5 +21,21 @@
     "service:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-backend-service.ps1 -Action Stop",
     "service:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-backend-service.ps1 -Action Status",
     "pin:unlock": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/clear-pin-lockout.ps1"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.101.0",
+    "lucide-react": "^1.17.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.16",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "jsdom": "^29.1.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.8"
   }
 }

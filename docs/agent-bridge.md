@@ -62,9 +62,11 @@ Hold the command button and say:
 
 - `use codex work in the sun agent chat`
 - `use codex work in the sun new`
+- `use new work in the sun`
+- `use work in the sun new`
 - `use claude scarcity shores planning`
 
-The app does not need to know how to open or attach to that session. It only records the target. The desktop agent bridge resolves the phrase to a real session, creates one when `mode` is `new`, and may send feedback if the target is ambiguous.
+The app does not need to know how to open or attach to that session. It only records the target. Short new-chat phrases default to Codex and resolve the project name through the Codex project catalog. The desktop agent bridge resolves the phrase to a real session, creates one when `mode` is `new`, and may send feedback if the target is ambiguous.
 
 ## Voice Catalog Commands
 
@@ -116,7 +118,7 @@ For Codex delivery, `text` is agent-facing and is prefixed with a short Work in 
 
 ## HTTP Surface
 
-The frontend UI and backend API share one HTTP server. Its default local port is `38173`; use the `3817x` range for Work in the Sun web surfaces when a separate UI or helper server is added.
+The frontend UI and backend API share one HTTP server. The React/TypeScript source lives in `ui/`, builds to `dist/app`, and is served by `server.js`. Its default local port is `38173`; use the `3817x` range for Work in the Sun web surfaces when a separate UI or helper server is added.
 
 - `GET /api/agent/target`
 - `POST /api/agent/target`

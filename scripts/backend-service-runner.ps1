@@ -86,6 +86,29 @@ try {
         $NodePath = $nodeCommand.Source
     }
 
+    $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+
+    if (-not $npmCommand) {
+        $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
+    }
+
+    if ($npmCommand) {
+        Write-ServiceLog "Building frontend UI with $($npmCommand.Source) run ui:build."
+        Push-Location $repoRootPath
+        try {
+            & $npmCommand.Source run ui:build *>> $LogPath
+            $buildExitCode = $LASTEXITCODE
+        } finally {
+            Pop-Location
+        }
+
+        if ($buildExitCode -ne 0) {
+            throw "Frontend UI build failed with code $buildExitCode."
+        }
+    } else {
+        Write-ServiceLog "npm was not found; backend startup will require an existing frontend build."
+    }
+
     $serverPath = Join-Path $repoRootPath "server.js"
 
     if (-not (Test-Path -LiteralPath $serverPath)) {

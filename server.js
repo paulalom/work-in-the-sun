@@ -14,7 +14,7 @@ const packageJson = require("./package.json");
 const DEFAULT_PORT = 38173;
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.WITS_HTTP_PORT || process.env.PORT || DEFAULT_PORT);
-const APP_DIR = path.join(__dirname, "app");
+const APP_DIR = path.join(__dirname, "dist", "app");
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_SCREENSHOT_BYTES = finitePositiveNumber(process.env.WITS_MAX_SCREENSHOT_BYTES, 16 * 1024 * 1024);
@@ -292,6 +292,14 @@ function validateStartupSecurity() {
 
   if (isWildcardHost(HOST) || !isLoopbackHost(HOST)) {
     throw new Error("Remote HTTP binding requires WITS_ACCESS_TOKEN.");
+  }
+}
+
+function validateAppBuild() {
+  const indexPath = path.join(APP_DIR, "index.html");
+
+  if (!isFile(indexPath)) {
+    throw new Error(`Frontend build not found at ${indexPath}. Run npm run ui:build before starting the backend.`);
   }
 }
 
@@ -1037,10 +1045,40 @@ async function unlockSession(request, response) {
   await failPinUnlock(request, response);
 }
 
+async function resolveAgentTargetInput(input = {}) {
+  const target = { ...input };
+  const provider = String(target.provider || target.agent || "").trim().toLowerCase();
+  const mode = target.mode === "new" || target.new ? "new" : "existing";
+
+  if (provider !== "codex" || mode !== "new" || target.workspace || target.workspacePath) {
+    return target;
+  }
+
+  const workspaceQuery = String(target.workspaceQuery || "").trim();
+
+  if (!workspaceQuery) {
+    return target;
+  }
+
+  const project = await codexCatalog.resolveProject(workspaceQuery);
+
+  if (!project) {
+    throw new HttpError(404, `No Codex project matched ${workspaceQuery}.`);
+  }
+
+  return {
+    ...target,
+    workspace: project.workspace,
+    route: target.route || project.label,
+    sessionHint: target.sessionHint || project.label,
+    label: target.label || `${project.label} / New chat`,
+  };
+}
+
 async function updateAgentTarget(request, response) {
   checkRateLimit(request, "command", COMMAND_RATE_LIMIT);
   const body = await readJson(request, MAX_JSON_BYTES);
-  const target = await agentStore.setActiveTarget(body.target || body);
+  const target = await agentStore.setActiveTarget(await resolveAgentTargetInput(body.target || body));
   json(response, 200, { target });
 }
 
@@ -1051,7 +1089,7 @@ async function queueAgentCommand(request, response) {
   try {
     const text = String(body.text || "");
     const target = body.target
-      ? agentStore.normalizeAgentTarget(body.target)
+      ? agentStore.normalizeAgentTarget(await resolveAgentTargetInput(body.target))
       : await agentStore.getActiveTarget();
     const deliveryPreview = codexBridge.dispatchRoute({ target });
     const command = await agentStore.appendCommand({
@@ -1380,6 +1418,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 validateStartupSecurity();
+validateAppBuild();
 server.listen(PORT, HOST, () => {
   console.log(`Work in the Sun listening on http://${HOST}:${PORT}`);
   if (PIN_ENABLED) {

@@ -1,8 +1,8 @@
 # Work in the Sun
 
-Work in the Sun is a project for making secure, remote AI-assisted development practical from a phone, tablet, or another device back to a desktop workstation.
+Work in the Sun is a speech-first project for making secure, remote AI-assisted development practical from a phone, tablet, or another device back to a desktop workstation.
 
-The core idea is simple: keep the serious compute, credentials, editor state, and local files on the desktop, then expose only the minimum secure interface needed to drive development remotely through a tunnel.
+The core idea is simple: keep the serious compute, credentials, editor state, and local files on the desktop, then expose only the minimum secure interface needed to drive development remotely through a tunnel. The intended working loop is audio-first: speak instructions, hear concise text-to-speech feedback, and use typed text, visual status, screenshots, and transcripts as fallback or review surfaces.
 
 ## Goals
 
@@ -26,7 +26,7 @@ The core idea is simple: keep the serious compute, credentials, editor state, an
 - [Goals and Decisions](docs/goals-and-decisions.md)
 - [Agent Bridge](docs/agent-bridge.md)
 
-## UI Prototype
+## UI App
 
 Install the Local Dictate release dependency:
 
@@ -40,7 +40,13 @@ Run the desktop-hosted web app:
 npm run dev
 ```
 
-The app serves both the frontend UI and backend API from one HTTP server. By default it listens on `127.0.0.1:38173`; keep the `3817x` range reserved for Work in the Sun local web surfaces so it is easy to spot in process and port listings. Override with `WITS_HTTP_PORT` or `PORT` when needed.
+The React/TypeScript frontend source lives in `ui/` and builds to `dist/app` before the backend starts. The app still serves both the frontend UI and backend API from one HTTP server. By default it listens on `127.0.0.1:38173`; keep the `3817x` range reserved for Work in the Sun local web surfaces so it is easy to spot in process and port listings. Override with `WITS_HTTP_PORT` or `PORT` when needed.
+
+For frontend-only iteration, run Vite on the adjacent development port:
+
+```powershell
+npm run ui:dev
+```
 
 The backend also needs `ffmpeg` on `PATH`, or `FFMPEG_PATH` set. For phone testing, serve it over Tailscale HTTPS so browser audio capture is allowed.
 
@@ -82,7 +88,7 @@ npm run service:install
 npm run service:start
 ```
 
-This tries to create a Scheduled Task named `WorkInTheSunBackend`. If Windows denies task registration, it falls back to a current-user Startup entry at `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\WorkInTheSunBackend.cmd`. Both paths run `scripts/backend-service-runner.ps1`, log to `.local/backend-service.log`, read optional machine-specific environment values from `.local/service.env`, and refuse to start if `.local/pin-lockout.json` exists.
+This tries to create a Scheduled Task named `WorkInTheSunBackend`. If Windows denies task registration, it falls back to a current-user Startup entry at `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\WorkInTheSunBackend.cmd`. Both paths run `scripts/backend-service-runner.ps1`, build the frontend with `npm run ui:build`, log to `.local/backend-service.log`, read optional machine-specific environment values from `.local/service.env`, and refuse to start if `.local/pin-lockout.json` exists.
 
 Example `.local/service.env`:
 

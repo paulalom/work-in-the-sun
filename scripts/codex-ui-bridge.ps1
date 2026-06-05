@@ -3,6 +3,7 @@ param(
   [string]$Action = "send",
   [string]$Text = "",
   [string]$TargetLabel = "",
+  [string]$TargetTitle = "",
   [string]$Submit = "true",
   [string]$Highlight = "true",
   [int]$MaxChars = 20000
@@ -28,9 +29,13 @@ public static class User32Bridge {
   }
 
   [DllImport("user32.dll")]
+  public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")]
   public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")]
   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")]
+  public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
   [DllImport("user32.dll")]
   public static extern bool SetCursorPos(int X, int Y);
   [DllImport("user32.dll")]
@@ -93,9 +98,148 @@ function Get-CodexWindow {
   }
 }
 
+function Test-CodexWindowForeground {
+  param($Process)
+
+  $foreground = [User32Bridge]::GetForegroundWindow()
+
+  if ($foreground -eq [IntPtr]::Zero) {
+    return $false
+  }
+
+  [uint32]$processId = 0
+  [User32Bridge]::GetWindowThreadProcessId($foreground, [ref]$processId) | Out-Null
+  return [int]$processId -eq [int]$Process.Id
+}
+
+function Invoke-CodexAppActivate {
+  param($Process)
+
+  $shell = $null
+  try {
+    $shell = New-Object -ComObject WScript.Shell
+    return [bool]$shell.AppActivate([int]$Process.Id)
+  } catch {
+    return $false
+  } finally {
+    if ($shell) {
+      [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+    }
+  }
+}
+
+function Select-CodexWindow {
+  param($Window)
+
+  $handle = [IntPtr]$Window.Process.MainWindowHandle
+  [User32Bridge]::ShowWindow($handle, $ShowRestore) | Out-Null
+  Start-Sleep -Milliseconds 100
+
+  if (Test-CodexWindowForeground $Window.Process) {
+    return
+  }
+
+  [User32Bridge]::SetForegroundWindow($handle) | Out-Null
+  Start-Sleep -Milliseconds 160
+
+  if (Test-CodexWindowForeground $Window.Process) {
+    return
+  }
+
+  try {
+    $Window.Root.SetFocus()
+  } catch {
+    # UI Automation focus is best-effort; the Win32 fallbacks below are still useful.
+  }
+  [User32Bridge]::SetForegroundWindow($handle) | Out-Null
+  Start-Sleep -Milliseconds 160
+
+  if (Test-CodexWindowForeground $Window.Process) {
+    return
+  }
+
+  Invoke-CodexAppActivate $Window.Process | Out-Null
+  Start-Sleep -Milliseconds 200
+
+  if (Test-CodexWindowForeground $Window.Process) {
+    return
+  }
+
+  [System.Windows.Forms.SendKeys]::SendWait("%")
+  [User32Bridge]::SetForegroundWindow($handle) | Out-Null
+  Start-Sleep -Milliseconds 200
+
+  if (-not (Test-CodexWindowForeground $Window.Process)) {
+    throw "Codex desktop window could not be brought to the foreground."
+  }
+}
+
 function Normalize-MatchText {
   param([string]$Value)
   return ($Value -replace "[^a-zA-Z0-9]+", " ").Trim().ToLowerInvariant()
+}
+
+function Resolve-ExpectedChatTitle {
+  param([string]$Label, [string]$Title)
+
+  $candidate = ""
+
+  if (-not [string]::IsNullOrWhiteSpace($Title)) {
+    $candidate = $Title.Trim()
+  } elseif (-not [string]::IsNullOrWhiteSpace($Label)) {
+    $parts = $Label -split "\s*/\s*"
+    $candidate = $parts[$parts.Count - 1].Trim()
+  }
+
+  if ((Normalize-MatchText $candidate) -eq "current") {
+    return ""
+  }
+
+  return $candidate
+}
+
+function Test-NormalizedExactMatch {
+  param([string]$Actual, [string]$Expected)
+
+  $actualText = Normalize-MatchText $Actual
+  $expectedText = Normalize-MatchText $Expected
+  return [bool]($actualText -and $expectedText -and $actualText -eq $expectedText)
+}
+
+function Assert-SelectedChatMatches {
+  param([string]$ActualTitle, [string]$ExpectedTitle, [string]$Label)
+
+  if ([string]::IsNullOrWhiteSpace($ExpectedTitle)) {
+    return
+  }
+
+  if (Test-NormalizedExactMatch $ActualTitle $ExpectedTitle) {
+    return
+  }
+
+  $actualDisplay = if ([string]::IsNullOrWhiteSpace($ActualTitle)) { "<unknown>" } else { $ActualTitle }
+  $expectedDisplay = if ([string]::IsNullOrWhiteSpace($Label)) { $ExpectedTitle } else { "$ExpectedTitle ($Label)" }
+  throw "Selected Codex chat '$actualDisplay' did not match target '$expectedDisplay'. Message was not posted."
+}
+
+function Wait-ForSelectedChat {
+  param($Root, [string]$ExpectedTitle, [string]$Label, [int]$TimeoutMs = 2200)
+
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+  $lastTitle = ""
+
+  do {
+    $lastTitle = Get-VisibleChatTitle $Root
+
+    if ([string]::IsNullOrWhiteSpace($ExpectedTitle) -or (Test-NormalizedExactMatch $lastTitle $ExpectedTitle)) {
+      return $lastTitle
+    }
+
+    Start-Sleep -Milliseconds 150
+  } while ([DateTime]::UtcNow -lt $deadline)
+
+  Assert-SelectedChatMatches $lastTitle $ExpectedTitle $Label
+  return $lastTitle
 }
 
 function Get-Descendants {
@@ -294,23 +438,26 @@ function Invoke-Element {
 }
 
 function Select-TargetChat {
-  param($Root, [string]$Label)
+  param($Root, [string]$Label, [string]$Title)
 
   $query = Normalize-MatchText $Label
+  $expectedTitle = Resolve-ExpectedChatTitle $Label $Title
+  $titleQuery = Normalize-MatchText $expectedTitle
 
-  if (-not $query) {
+  if (-not $query -and -not $titleQuery) {
     return Get-VisibleChatTitle $Root
   }
 
   $currentTitle = Get-VisibleChatTitle $Root
-  $current = Normalize-MatchText $currentTitle
 
-  if ($current -and ($current.Contains($query) -or $query.Contains($current))) {
+  if (Test-NormalizedExactMatch $currentTitle $expectedTitle) {
     return $currentTitle
   }
 
   $all = Get-Descendants $Root
   $rootRect = $Root.Current.BoundingRectangle
+  $fullLabelMatches = @()
+  $titleMatches = @()
 
   for ($i = 0; $i -lt $all.Count; $i++) {
     $element = $all.Item($i)
@@ -318,21 +465,41 @@ function Select-TargetChat {
     $rect = $currentElement.BoundingRectangle
     $name = [string]$currentElement.Name
     $normalizedName = Normalize-MatchText $name
-
-    if (
-      $normalizedName -and
-      ($normalizedName.Contains($query) -or $query.Contains($normalizedName)) -and
+    $isSidebarItem =
       $rect.X -lt ($rootRect.X + 380) -and
       $rect.Width -gt 50 -and
       (
         $currentElement.ControlType -eq [System.Windows.Automation.ControlType]::Button -or
         $currentElement.ControlType -eq [System.Windows.Automation.ControlType]::ListItem
       )
-    ) {
-      Invoke-Element $element
-      Start-Sleep -Milliseconds 900
-      return Get-VisibleChatTitle $Root
+
+    if (-not $normalizedName -or -not $isSidebarItem) {
+      continue
     }
+
+    if ($query -and ($normalizedName -eq $query -or $normalizedName.Contains($query))) {
+      $fullLabelMatches += $element
+      continue
+    }
+
+    if ($titleQuery -and ($normalizedName -eq $titleQuery -or $normalizedName.Contains($titleQuery))) {
+      $titleMatches += $element
+    }
+  }
+
+  $selectedElement = $null
+
+  if ($fullLabelMatches.Count -gt 0) {
+    $selectedElement = $fullLabelMatches[0]
+  } elseif ($titleMatches.Count -eq 1) {
+    $selectedElement = $titleMatches[0]
+  } elseif ($titleMatches.Count -gt 1) {
+    throw "More than one visible Codex chat matched '$expectedTitle'. Message was not posted."
+  }
+
+  if ($selectedElement) {
+    Invoke-Element $selectedElement
+    return Wait-ForSelectedChat $Root $expectedTitle $Label
   }
 
   throw "Codex chat '$Label' was not visible in the sidebar."
@@ -413,9 +580,7 @@ try {
   [User32Bridge]::SetProcessDPIAware() | Out-Null
 
   $window = Get-CodexWindow
-  [User32Bridge]::ShowWindow([IntPtr]$window.Process.MainWindowHandle, $ShowRestore) | Out-Null
-  [User32Bridge]::SetForegroundWindow([IntPtr]$window.Process.MainWindowHandle) | Out-Null
-  Start-Sleep -Milliseconds 120
+  Select-CodexWindow $window
 
   if ($Action -eq "read") {
     $documentText = Get-DocumentText $window.Root $MaxChars
@@ -430,7 +595,7 @@ try {
   }
 
   if ($Action -eq "screenshot") {
-    $chatTitle = Select-TargetChat $window.Root $TargetLabel
+    $chatTitle = Select-TargetChat $window.Root $TargetLabel $TargetTitle
     Start-Sleep -Milliseconds 250
     $capture = Capture-WindowImage ([IntPtr]$window.Process.MainWindowHandle)
 
@@ -454,7 +619,8 @@ try {
     throw "Missing text to send."
   }
 
-  $chatTitle = Select-TargetChat $window.Root $TargetLabel
+  $chatTitle = Select-TargetChat $window.Root $TargetLabel $TargetTitle
+  Assert-SelectedChatMatches $chatTitle (Resolve-ExpectedChatTitle $TargetLabel $TargetTitle) $TargetLabel
   $composer = Find-Composer $window.Root
   $composerInfo = Get-ElementInfo $composer
   $rect = $composer.Current.BoundingRectangle

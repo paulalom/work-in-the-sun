@@ -32,7 +32,13 @@ Start the backend locally:
 npm run dev
 ```
 
-The backend serves the frontend UI and API from one HTTP server. The default bind is `127.0.0.1:38173`; keep the `3817x` range reserved for Work in the Sun local web surfaces. Set `WITS_HTTP_PORT` or `PORT` to override it.
+The frontend source lives in `ui/` and builds to `dist/app` before the backend starts. The backend serves the built frontend UI and API from one HTTP server. The default bind is `127.0.0.1:38173`; keep the `3817x` range reserved for Work in the Sun local web surfaces. Set `WITS_HTTP_PORT` or `PORT` to override it.
+
+For frontend-only iteration, run:
+
+```powershell
+npm run ui:dev
+```
 
 The backend needs `ffmpeg` on `PATH`, or `FFMPEG_PATH` set. For phone testing, serve the backend through Tailscale HTTPS so browser audio capture works securely.
 
