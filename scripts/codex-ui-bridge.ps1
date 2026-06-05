@@ -4,6 +4,7 @@ param(
   [string]$Text = "",
   [string]$TargetLabel = "",
   [string]$TargetTitle = "",
+  [string]$NewChat = "false",
   [string]$Submit = "true",
   [string]$Highlight = "true",
   [int]$MaxChars = 20000
@@ -68,8 +69,9 @@ function Convert-BridgeBoolean {
   }
 }
 
-$Submit = Convert-BridgeBoolean $Submit $true
-$Highlight = Convert-BridgeBoolean $Highlight $true
+$ShouldSubmit = Convert-BridgeBoolean $Submit $true
+$ShouldHighlight = Convert-BridgeBoolean $Highlight $true
+$ShouldCreateNewChat = Convert-BridgeBoolean $NewChat $false
 
 function Write-JsonResult {
   param($Value)
@@ -242,6 +244,25 @@ function Wait-ForSelectedChat {
   return $lastTitle
 }
 
+function Wait-ForStartedChat {
+  param($Root, [int]$TimeoutMs = 12000)
+
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+  $lastTitle = ""
+
+  do {
+    $lastTitle = Get-VisibleChatTitle $Root
+
+    if (-not [string]::IsNullOrWhiteSpace($lastTitle)) {
+      return $lastTitle
+    }
+
+    Start-Sleep -Milliseconds 300
+  } while ([DateTime]::UtcNow -lt $deadline)
+
+  return $lastTitle
+}
+
 function Get-Descendants {
   param($Root)
   $Root.FindAll(
@@ -376,6 +397,64 @@ function Find-Composer {
   throw "Codex input box was not found."
 }
 
+function New-FallbackComposerTarget {
+  param($Root)
+
+  $rootRect = $Root.Current.BoundingRectangle
+  $mainLeft = $rootRect.X + [Math]::Min(430, [Math]::Max(280, $rootRect.Width * 0.32))
+  $rightPadding = 110
+  $width = [Math]::Max(280, ($rootRect.X + $rootRect.Width) - $mainLeft - $rightPadding)
+  $height = 96
+  $top = $rootRect.Y + ($rootRect.Height * 0.475)
+  $rect = [pscustomobject]@{
+    X = [double]$mainLeft
+    Y = [double]$top
+    Width = [double]$width
+    Height = [double]$height
+  }
+
+  [pscustomobject]@{
+    Element = $null
+    Rect = $rect
+    ClickX = $rect.X + ($rect.Width / 2)
+    ClickY = $rect.Y + ($rect.Height / 2)
+    Info = [pscustomobject]@{
+      name = "fallback composer target"
+      className = ""
+      controlType = "Synthetic"
+      rect = [pscustomobject]@{
+        x = [int]$rect.X
+        y = [int]$rect.Y
+        width = [int]$rect.Width
+        height = [int]$rect.Height
+      }
+    }
+  }
+}
+
+function Resolve-ComposerTarget {
+  param($Root, [bool]$AllowFallback = $false)
+
+  try {
+    $composer = Find-Composer $Root
+    $rect = $composer.Current.BoundingRectangle
+
+    return [pscustomobject]@{
+      Element = $composer
+      Rect = $rect
+      ClickX = $rect.X + [Math]::Min(24, $rect.Width / 2)
+      ClickY = $rect.Y + [Math]::Min(20, $rect.Height / 2)
+      Info = Get-ElementInfo $composer
+    }
+  } catch {
+    if (-not $AllowFallback) {
+      throw
+    }
+
+    return New-FallbackComposerTarget $Root
+  }
+}
+
 function Get-DocumentText {
   param($Root, [int]$Limit)
 
@@ -505,6 +584,83 @@ function Select-TargetChat {
   throw "Codex chat '$Label' was not visible in the sidebar."
 }
 
+function Find-NewChatButton {
+  param($Root)
+
+  $all = Get-Descendants $Root
+  $rootRect = $Root.Current.BoundingRectangle
+  $candidates = @()
+
+  for ($i = 0; $i -lt $all.Count; $i++) {
+    $element = $all.Item($i)
+    $current = $element.Current
+    $rect = $current.BoundingRectangle
+    $name = [string]$current.Name
+    $normalizedName = Normalize-MatchText $name
+
+    if (
+      -not $current.IsEnabled -or
+      $current.ControlType -ne [System.Windows.Automation.ControlType]::Button -or
+      -not $normalizedName -or
+      $rect.Width -lt 12 -or
+      $rect.Height -lt 12
+    ) {
+      continue
+    }
+
+    $isNewChat =
+      $normalizedName -eq "new chat" -or
+      $normalizedName -eq "new conversation" -or
+      $normalizedName -eq "new thread" -or
+      $normalizedName.Contains("new chat") -or
+      $normalizedName.Contains("new conversation") -or
+      $normalizedName.Contains("new thread")
+
+    if (-not $isNewChat) {
+      continue
+    }
+
+    $score = 1000
+
+    if ($rect.X -lt ($rootRect.X + 420)) {
+      $score -= 500
+    }
+
+    if ($rect.Y -lt ($rootRect.Y + 180)) {
+      $score -= 250
+    }
+
+    $score += [Math]::Max(0, [int]($rect.Y - $rootRect.Y))
+
+    $candidates += [pscustomobject]@{
+      Element = $element
+      Score = $score
+    }
+  }
+
+  if ($candidates.Count -lt 1) {
+    return $null
+  }
+
+  return ($candidates | Sort-Object Score | Select-Object -First 1).Element
+}
+
+function Invoke-NewChat {
+  param($Root)
+
+  $button = Find-NewChatButton $Root
+
+  if ($button) {
+    Invoke-Element $button
+  } else {
+    [System.Windows.Forms.SendKeys]::SendWait("^n")
+  }
+
+  Start-Sleep -Milliseconds 900
+
+  return Get-VisibleChatTitle $Root
+}
+
 function Invoke-MouseClick {
   param([double]$X, [double]$Y)
   [User32Bridge]::SetCursorPos([int]$X, [int]$Y) | Out-Null
@@ -517,7 +673,7 @@ function Invoke-MouseClick {
 function Show-Highlight {
   param($Rect)
 
-  if (-not $Highlight) {
+  if (-not $ShouldHighlight) {
     return
   }
 
@@ -619,21 +775,31 @@ try {
     throw "Missing text to send."
   }
 
-  $chatTitle = Select-TargetChat $window.Root $TargetLabel $TargetTitle
-  Assert-SelectedChatMatches $chatTitle (Resolve-ExpectedChatTitle $TargetLabel $TargetTitle) $TargetLabel
-  $composer = Find-Composer $window.Root
-  $composerInfo = Get-ElementInfo $composer
-  $rect = $composer.Current.BoundingRectangle
+  $newChatStarted = $false
+
+  if ($ShouldCreateNewChat) {
+    $chatTitle = Invoke-NewChat $window.Root
+  } else {
+    $chatTitle = Select-TargetChat $window.Root $TargetLabel $TargetTitle
+    Assert-SelectedChatMatches $chatTitle (Resolve-ExpectedChatTitle $TargetLabel $TargetTitle) $TargetLabel
+  }
+
+  $composerTarget = Resolve-ComposerTarget $window.Root $ShouldCreateNewChat
+  $composer = $composerTarget.Element
+  $composerInfo = $composerTarget.Info
+  $rect = $composerTarget.Rect
 
   Show-Highlight $rect
 
-  try {
-    $composer.SetFocus()
-  } catch {
-    # Contenteditable surfaces often focus more reliably after a mouse click.
+  if ($composer) {
+    try {
+      $composer.SetFocus()
+    } catch {
+      # Contenteditable surfaces often focus more reliably after a mouse click.
+    }
   }
 
-  Invoke-MouseClick ($rect.X + [Math]::Min(24, $rect.Width / 2)) ($rect.Y + [Math]::Min(20, $rect.Height / 2))
+  Invoke-MouseClick $composerTarget.ClickX $composerTarget.ClickY
   Start-Sleep -Milliseconds 80
 
   $oldClipboard = Set-ClipboardTextTemporarily $Text
@@ -641,7 +807,7 @@ try {
     [System.Windows.Forms.SendKeys]::SendWait("^v")
     Start-Sleep -Milliseconds 120
 
-    if ($Submit) {
+    if ($ShouldSubmit) {
       [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
     }
   } finally {
@@ -649,10 +815,21 @@ try {
     Restore-Clipboard $oldClipboard
   }
 
+  if ($ShouldCreateNewChat -and $ShouldSubmit) {
+    $startedChatTitle = Wait-ForStartedChat $window.Root
+
+    if (-not [string]::IsNullOrWhiteSpace($startedChatTitle)) {
+      $chatTitle = $startedChatTitle
+      $newChatStarted = $true
+    }
+  }
+
   Write-JsonResult ([pscustomobject]@{
     ok = $true
     action = "send"
-    submitted = $Submit
+    submitted = $ShouldSubmit
+    newChat = $ShouldCreateNewChat
+    newChatStarted = $newChatStarted
     windowTitle = $window.Process.MainWindowTitle
     chatTitle = $chatTitle
     targetLabel = $TargetLabel
