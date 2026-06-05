@@ -389,7 +389,7 @@ h1 {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 5px;
   overflow: auto;
   padding: 16px 16px calc(var(--control-dock-height) + 20px);
   background: #fbfcfe;
@@ -401,7 +401,7 @@ h1 {
   max-width: min(86%, 420px);
   padding: 11px 12px;
   border-radius: 8px;
-  line-height: 1.38;
+  line-height: 1.24;
   border: 1px solid var(--line);
   background: var(--surface);
   overflow-wrap: anywhere;
