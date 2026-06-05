@@ -33,6 +33,7 @@ import type {
   WorkStatus,
   CaptureMode,
 } from "../shared/types";
+import { stopAppAudio, type SpeechResult } from "./audioPlayback";
 
 const MAX_FEED_MESSAGES_PER_THREAD = 30;
 const MAX_FEED_MESSAGE_CHARS = 1200;
@@ -56,8 +57,6 @@ const RECENT_THREAD_LIMIT = 8;
 const GLOBAL_FEED_KEY = "global";
 const UNCATEGORIZED_THREAD_LABEL = "Uncategorized";
 const TARGET_SWITCH_NOTICE_PATTERN = /^Using .+\.$/;
-
-type SpeechResult = true | false | "stopped";
 
 interface SpeechRecognitionConstructor {
   new (): SpeechRecognitionLike;
@@ -1539,50 +1538,18 @@ export function App() {
   }
 
   function stopAudioPlayback({ announce = true } = {}) {
-    audioStopTokenRef.current += 1;
-    responseAudioQueueRef.current = Promise.resolve();
-
-    if (activeSpeechFinishRef.current) {
-      activeSpeechFinishRef.current("stopped");
-    }
-
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
-
-    activeUtteranceRef.current = null;
-
-    if (activeAudioSourceRef.current) {
-      try {
-        activeAudioSourceRef.current.stop(0);
-      } catch {
-        // Already stopped.
-      }
-
-      try {
-        activeAudioSourceRef.current.disconnect();
-      } catch {
-        // Already disconnected.
-      }
-
-      activeAudioSourceRef.current = null;
-    }
-
-    if (activeAudioElementRef.current) {
-      activeAudioElementRef.current.pause();
-      activeAudioElementRef.current.removeAttribute("src");
-      activeAudioElementRef.current.load();
-      activeAudioElementRef.current = null;
-    }
-
-    if (activeAudioFinishRef.current) {
-      activeAudioFinishRef.current("stopped");
-    }
-
-    if (activeAudioUrlRef.current) {
-      URL.revokeObjectURL(activeAudioUrlRef.current);
-      activeAudioUrlRef.current = null;
-    }
+    stopAppAudio({
+      audioStopToken: audioStopTokenRef,
+      responseAudioQueue: responseAudioQueueRef,
+      activeSpeechFinish: activeSpeechFinishRef,
+      activeUtterance: activeUtteranceRef,
+      activeAudioSource: activeAudioSourceRef,
+      activeAudioElement: activeAudioElementRef,
+      activeAudioFinish: activeAudioFinishRef,
+      activeAudioUrl: activeAudioUrlRef,
+      speechSynthesis: window.speechSynthesis,
+      revokeObjectUrl: (url) => URL.revokeObjectURL(url),
+    });
 
     setWorkStatus("idle", "Ready", "Audio stopped");
 

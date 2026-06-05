@@ -19,7 +19,7 @@ export const commandHelp = [
   "use codex work in the sun new",
   "use new work in the sun",
   "use work in the sun new",
-  "stop audio",
+  "stop / stop audio",
   "read draft",
   "rename to ...",
   "append ...",

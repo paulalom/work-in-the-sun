@@ -95,4 +95,10 @@ describe("command parser", () => {
     expect(splitCommandComposition("echo off, commands on")).toEqual(["echo off", "commands on"]);
     expect(splitCommandComposition("append fish and chips")).toEqual(["append fish and chips"]);
   });
+
+  it("parses stop as a global audio stop command", () => {
+    expect(parseSingleVoiceCommand("stop")).toEqual({ type: "stopAudio" });
+    expect(parseSingleVoiceCommand("stop audio")).toEqual({ type: "stopAudio" });
+    expect(parseSingleVoiceCommand("stop speaking")).toEqual({ type: "stopAudio" });
+  });
 });
