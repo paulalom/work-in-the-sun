@@ -25,9 +25,11 @@ import type {
   AgentEvent,
   AgentTarget,
   CatalogChat,
+  CatalogProject,
   FeedMessage,
   FeedMessageType,
   ListedChat,
+  ListedProject,
   ListContext,
   ScreenshotMeta,
   WorkStatus,
@@ -54,9 +56,10 @@ const MIN_BROWSER_TTS_WATCHDOG_MS = 3500;
 const MAX_BROWSER_TTS_WATCHDOG_MS = 60000;
 const THREAD_ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const RECENT_THREAD_LIMIT = 8;
-const GLOBAL_FEED_KEY = "global";
+export const GLOBAL_FEED_KEY = "global";
 const UNCATEGORIZED_THREAD_LABEL = "Uncategorized";
 const TARGET_SWITCH_NOTICE_PATTERN = /^Using .+\.$/;
+const CATALOG_PAGE_LIMIT = 5;
 
 interface SpeechRecognitionConstructor {
   new (): SpeechRecognitionLike;
@@ -111,7 +114,11 @@ function isCurrentTarget(target?: AgentTarget | null) {
   return [target?.route, target?.sessionHint, target?.label].some((value) => /^current$/i.test(String(value || "")));
 }
 
-function feedKeyFromTarget(target?: AgentTarget | null) {
+function hasConcreteThreadId(target?: AgentTarget | null) {
+  return Boolean(threadIdFromTarget(target));
+}
+
+export function feedKeyFromTarget(target?: AgentTarget | null) {
   if (!target) {
     return GLOBAL_FEED_KEY;
   }
@@ -124,16 +131,11 @@ function feedKeyFromTarget(target?: AgentTarget | null) {
   }
 
   if (target.mode === "new") {
-    return [
-      provider,
-      "new",
-      normalizeFeedKeyPart(target.workspace || target.workspaceQuery || ""),
-      normalizeFeedKeyPart(target.route || target.sessionHint || target.label || "new"),
-    ].join(":");
+    return GLOBAL_FEED_KEY;
   }
 
   if (isCurrentTarget(target)) {
-    return `${provider}:current`;
+    return GLOBAL_FEED_KEY;
   }
 
   return [
@@ -142,6 +144,20 @@ function feedKeyFromTarget(target?: AgentTarget | null) {
     normalizeFeedKeyPart(target.workspace || ""),
     normalizeFeedKeyPart(target.route || target.sessionHint || target.label || "current"),
   ].join(":");
+}
+
+export function feedKeyFromAgentEvent(
+  event: Pick<AgentEvent, "commandId" | "target">,
+  commandFeedKeys: Record<string, string> = {},
+) {
+  const targetFeedKey = event.target ? feedKeyFromTarget(event.target) : "";
+
+  if (hasConcreteThreadId(event.target)) {
+    return targetFeedKey;
+  }
+
+  const commandFeedKey = event.commandId ? commandFeedKeys[event.commandId] : "";
+  return commandFeedKey || targetFeedKey || GLOBAL_FEED_KEY;
 }
 
 function feedKeyFromMessage(message: FeedMessage) {
@@ -260,6 +276,7 @@ export function App() {
   const activeFeedKeyRef = useRef(activeFeedKey);
   const selectedFeedKeyRef = useRef(selectedFeedKey);
   const nextThreadOrderRef = useRef(0);
+  const commandFeedKeysRef = useRef<Record<string, string>>({});
   const echoRef = useRef(echoEnabled);
   const autoSendRef = useRef(autoSendEnabled);
   const responseAudioRef = useRef(responseAudioEnabled);
@@ -285,6 +302,7 @@ export function App() {
   const agentEventCursorRef = useRef(0);
   const activeListContextRef = useRef<ListContext>(null);
   const lastListedChatsRef = useRef<ListedChat[]>([]);
+  const lastListedProjectsRef = useRef<ListedProject[]>([]);
   const screenshotObjectUrlsRef = useRef<string[]>([]);
   const speechMissingWarningShownRef = useRef(false);
 
@@ -831,6 +849,25 @@ export function App() {
   function clearTransientCommandState() {
     activeListContextRef.current = null;
     lastListedChatsRef.current = [];
+    lastListedProjectsRef.current = [];
+  }
+
+  function rememberCommandFeedKey(commandId: string | undefined, feedKey: string) {
+    const id = String(commandId || "").trim();
+
+    if (!id) {
+      return;
+    }
+
+    commandFeedKeysRef.current[id] = feedKey;
+  }
+
+  function rekeyCommandFeedKeys(fromFeedKey: string, toFeedKey: string) {
+    for (const [commandId, feedKey] of Object.entries(commandFeedKeysRef.current)) {
+      if (feedKey === fromFeedKey) {
+        commandFeedKeysRef.current[commandId] = toFeedKey;
+      }
+    }
   }
 
   function rekeyFeedMessages(fromFeedKey: string, toFeedKey: string) {
@@ -838,6 +875,7 @@ export function App() {
       return;
     }
 
+    rekeyCommandFeedKeys(fromFeedKey, toFeedKey);
     setMessages((current) =>
       current.map((message) => (feedKeyFromMessage(message) === fromFeedKey ? { ...message, feedKey: toFeedKey } : message)),
     );
@@ -857,6 +895,12 @@ export function App() {
       delete next[fromFeedKey];
       return next;
     });
+
+    if (selectedFeedKeyRef.current === fromFeedKey) {
+      selectedFeedKeyRef.current = toFeedKey;
+      activeFeedKeyRef.current = toFeedKey;
+      setSelectedFeedKey(toFeedKey);
+    }
   }
 
   function renderAgentTarget(target?: AgentTarget | null, options: { clearCommands?: boolean } = {}) {
@@ -947,6 +991,15 @@ export function App() {
       return;
     }
 
+    const previousCommandFeedKey = event.commandId ? commandFeedKeysRef.current[event.commandId] : "";
+    const eventFeedKey = feedKeyFromAgentEvent(event, commandFeedKeysRef.current);
+
+    if (previousCommandFeedKey && previousCommandFeedKey !== eventFeedKey) {
+      rekeyFeedMessages(previousCommandFeedKey, eventFeedKey);
+    }
+
+    rememberCommandFeedKey(event.commandId, eventFeedKey);
+
     if (
       event.target &&
       activeAgentTargetRef.current?.mode === "new" &&
@@ -959,7 +1012,7 @@ export function App() {
     const isWarning = ["warning", "error"].includes(String(event.level || ""));
     const shouldSpeak = event.speak ?? responseAudioRef.current;
     addMessage(text, isWarning ? "warning" : "agent", {
-      feedKey: event.target ? undefined : GLOBAL_FEED_KEY,
+      feedKey: eventFeedKey,
       speak: shouldSpeak,
       target: event.target,
     });
@@ -970,29 +1023,59 @@ export function App() {
     announceCommand("Would you like to list projects or chats?", "Choose projects or chats");
   }
 
-  function listLabels(items: Array<{ label?: string }>, key: "label" = "label") {
-    return items
-      .map((item) => item[key])
-      .filter(Boolean)
-      .join("; ");
+  function projectName(project: CatalogProject) {
+    return String(project.label || project.workspace || project.id || "Codex project").trim();
   }
 
-  async function listProjects() {
-    activeListContextRef.current = null;
+  function formatProject(project: CatalogProject, index: number, start: number) {
+    return `${start + index + 1}. ${projectName(project)}`;
+  }
+
+  function projectTarget(project: CatalogProject): AgentTarget {
+    const name = projectName(project);
+
+    return {
+      provider: "codex",
+      label: `${name} / New chat`,
+      workspace: project.workspace || "",
+      workspaceQuery: project.workspace ? undefined : name,
+      route: name,
+      sessionHint: name,
+      mode: "new",
+    };
+  }
+
+  async function listProjects(after = 0) {
     lastListedChatsRef.current = [];
+    lastListedProjectsRef.current = [];
     setWorkStatus("processing", "Listing", "Loading Codex projects");
 
     try {
-      const result = await api.fetchCatalog("projects", { limit: 25 });
-      const names = listLabels(result.projects || []);
+      const result = await api.fetchCatalog("projects", { after, limit: CATALOG_PAGE_LIMIT });
+      const projects = result.projects || [];
 
-      if (!names) {
-        announceCommand("No Codex projects found.", "No projects found");
+      if (!projects.length) {
+        activeListContextRef.current = null;
+        announceCommand(
+          after ? "No more Codex projects found." : "No Codex projects found.",
+          after ? "No more projects" : "No projects found",
+        );
         return;
       }
 
-      addMessage(`Projects: ${names}.`, "system");
-      setWorkStatus("idle", "Ready", `${result.total || 0} projects listed`);
+      const projectText = projects.map((project, index) => formatProject(project, index, after)).join("\n");
+      const cursor = result.cursor || after + projects.length;
+      const total = result.total || 0;
+      const hasMore = cursor < total;
+      activeListContextRef.current = hasMore ? { kind: "projects", cursor } : null;
+      lastListedProjectsRef.current = projects.map((project, index) => ({
+        project,
+        number: after + index + 1,
+        position: index + 1,
+      }));
+
+      addMessage(`Projects:\n${projectText}${hasMore ? "\nSay continue for more." : ""}`, "system");
+      setWorkStatus("idle", "Ready", hasMore ? "Say continue for more" : `${total} projects listed`);
     } catch (error) {
       addMessage(error instanceof Error ? error.message : "Could not load Codex projects.", "warning");
       setWorkStatus("idle", "Ready", "Project list unavailable");
@@ -1023,6 +1106,10 @@ export function App() {
     return chatTarget(item.chat);
   }
 
+  function listedProjectTarget(item: ListedProject): AgentTarget {
+    return projectTarget(item.project);
+  }
+
   async function useRecentChat(chat: CatalogChat) {
     await setAgentTarget(chatTarget(chat));
   }
@@ -1035,27 +1122,37 @@ export function App() {
     setWorkStatus("idle", "Ready", UNCATEGORIZED_THREAD_LABEL);
   }
 
-  async function useListedChat(number: number | null) {
+  async function useListedItem(number: number | null) {
     if (!number) {
-      addMessage("Which listed chat should I use?", "warning");
+      addMessage("Which listed item should I use?", "warning");
       setWorkStatus("idle", "Ready", "Say use one");
       return;
     }
 
-    const item = lastListedChatsRef.current.find((listed) => listed.number === number || listed.position === number);
+    const projectItem = lastListedProjectsRef.current.find(
+      (listed) => listed.number === number || listed.position === number,
+    );
 
-    if (!item) {
-      addMessage("That listed chat is not on the current page.", "warning");
-      setWorkStatus("idle", "Ready", "Listed chat not found");
+    if (projectItem) {
+      await setAgentTarget(listedProjectTarget(projectItem));
       return;
     }
 
-    await setAgentTarget(listedChatTarget(item));
+    const chatItem = lastListedChatsRef.current.find((listed) => listed.number === number || listed.position === number);
+
+    if (!chatItem) {
+      addMessage("That listed item is not on the current page.", "warning");
+      setWorkStatus("idle", "Ready", "Listed item not found");
+      return;
+    }
+
+    await setAgentTarget(listedChatTarget(chatItem));
   }
 
   async function listChats(after = 0, project = "") {
     const scoped = project.trim();
     const loadingDetail = scoped ? `Loading chats in ${scoped}` : "Loading Codex chats";
+    lastListedProjectsRef.current = [];
     setWorkStatus("processing", "Listing", loadingDetail);
 
     try {
@@ -1066,6 +1163,7 @@ export function App() {
       if (result.projectMissing) {
         activeListContextRef.current = { kind: "choices" };
         lastListedChatsRef.current = [];
+        lastListedProjectsRef.current = [];
         addMessage(`No Codex project matched ${scoped}.`, "warning");
         setWorkStatus("idle", "Ready", "Project not found");
         return;
@@ -1074,6 +1172,7 @@ export function App() {
       if (!chats.length) {
         activeListContextRef.current = null;
         lastListedChatsRef.current = [];
+        lastListedProjectsRef.current = [];
         announceCommand(
           projectLabel ? `No Codex chats found in ${projectLabel}.` : "No more Codex chats found.",
           "No more chats",
@@ -1081,7 +1180,7 @@ export function App() {
         return;
       }
 
-      const chatText = chats.map((chat, index) => formatChat(chat, index, after)).join("; ");
+      const chatText = chats.map((chat, index) => formatChat(chat, index, after)).join("\n");
       const hasMore = result.cursor < result.total;
       activeListContextRef.current = hasMore ? { kind: "chats", cursor: result.cursor, project: scoped } : null;
       lastListedChatsRef.current = chats.map((chat, index) => ({
@@ -1090,7 +1189,7 @@ export function App() {
         position: index + 1,
       }));
       const label = projectLabel ? `Chats in ${projectLabel}` : "Chats";
-      addMessage(`${label}: ${chatText}.${hasMore ? " Say continue for more." : ""}`, "system");
+      addMessage(`${label}:\n${chatText}${hasMore ? "\nSay continue for more." : ""}`, "system");
       setWorkStatus("idle", "Ready", hasMore ? "Say continue for more" : "Chats listed");
     } catch (error) {
       addMessage(error instanceof Error ? error.message : "Could not load Codex chats.", "warning");
@@ -1103,6 +1202,11 @@ export function App() {
 
     if (context?.kind === "chats") {
       await listChats(context.cursor, context.project || "");
+      return;
+    }
+
+    if (context?.kind === "projects") {
+      await listProjects(context.cursor);
       return;
     }
 
@@ -1461,8 +1565,8 @@ export function App() {
         await setAgentTarget(action.target);
         return;
 
-      case "useListedChat":
-        await useListedChat(action.number);
+      case "useListedItem":
+        await useListedItem(action.number);
         return;
 
       case "listPrompt":
@@ -1828,10 +1932,13 @@ export function App() {
       });
       const queued = result.command?.status === "queued" || result.message?.status === "queued";
       const target = result.command?.target || result.message?.target;
+      const commandId = result.command?.id || result.message?.id;
+      const feedKey = target ? feedKeyFromTarget(target) : activeFeedKeyRef.current;
       const statusText = queued ? "Queued" : "Sent";
       const dispatchStatus = queued ? "queued" : "sent";
       const dispatchLabel = queued ? "Queued for agent" : "Sent to agent";
-      addMessage(text, "user", { dispatchStatus, dispatchLabel, target });
+      rememberCommandFeedKey(commandId, feedKey);
+      addMessage(text, "user", { feedKey, dispatchStatus, dispatchLabel, target });
       renderAgentTarget(target);
       void queryClient.invalidateQueries({ queryKey: ["recent-chats"] });
       setDraftText("");

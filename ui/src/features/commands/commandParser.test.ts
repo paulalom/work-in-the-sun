@@ -64,8 +64,8 @@ describe("command parser", () => {
     expect(parseSpokenNumber("chat aid")).toBe(8);
   });
 
-  it("parses short listed chat selection", () => {
-    expect(parseSingleVoiceCommand("use one")).toEqual({ type: "useListedChat", number: 1 });
+  it("parses short listed item selection", () => {
+    expect(parseSingleVoiceCommand("use one")).toEqual({ type: "useListedItem", number: 1 });
   });
 
   it("preserves project chat list phrases", () => {

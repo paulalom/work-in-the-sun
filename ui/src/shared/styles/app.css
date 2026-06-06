@@ -594,6 +594,7 @@ h1 {
 
 .message p {
   margin: 0;
+  white-space: pre-line;
 }
 
 .message-user {

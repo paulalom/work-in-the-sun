@@ -157,9 +157,19 @@ export interface ListedChat {
   position: number;
 }
 
+export interface ListedProject {
+  project: CatalogProject;
+  number: number;
+  position: number;
+}
+
 export type ListContext =
   | {
       kind: "choices";
+    }
+  | {
+      kind: "projects";
+      cursor: number;
     }
   | {
       kind: "chats";

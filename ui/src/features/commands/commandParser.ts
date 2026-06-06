@@ -50,7 +50,7 @@ export type VoiceCommandAction =
   | { type: "listChats"; project?: string }
   | { type: "continueList" }
   | { type: "setAgentTarget"; target: AgentTarget }
-  | { type: "useListedChat"; number: number | null }
+  | { type: "useListedItem"; number: number | null }
   | { type: "replace"; text: string }
   | { type: "append"; text: string }
   | { type: "prepend"; text: string };
@@ -67,10 +67,10 @@ export function parseSingleVoiceCommand(command: string, context: CommandParseCo
     return null;
   }
 
-  const listedChatNumber = parseUseListedCommand(cleaned);
+  const listedItemNumber = parseUseListedCommand(cleaned);
 
-  if (listedChatNumber !== null) {
-    return { type: "useListedChat", number: listedChatNumber };
+  if (listedItemNumber !== null) {
+    return { type: "useListedItem", number: listedItemNumber };
   }
 
   const agentTarget = parseAgentTargetCommand(cleaned);
