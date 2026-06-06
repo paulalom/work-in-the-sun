@@ -14,7 +14,7 @@ This keeps Codex as one possible target rather than the protocol itself. A futur
 
 ## Codex Desktop Push
 
-The generic queue remains the core contract, but the backend also has Codex delivery drivers. On Windows, when `CODEX_DIRECT_SEND` is not `0`, Codex targets are sent through the visible Codex desktop window by default:
+The generic queue remains the core contract, but the backend also has Codex delivery drivers. On Windows, when `CODEX_DIRECT_SEND` is not `0`, Codex targets are sent through the visible Codex desktop window by default. New Codex targets with a resolved `workspace` use the app-server path instead, so the new thread starts with the intended project `cwd` rather than inheriting whichever project is selected in the visible window.
 
 1. Find the Codex window with Windows UI Automation.
 2. If the selected target names a chat, click the matching visible sidebar chat.
