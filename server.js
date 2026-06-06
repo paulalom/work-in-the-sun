@@ -5,6 +5,9 @@ const fsp = require("fs/promises");
 const http = require("http");
 const os = require("os");
 const path = require("path");
+
+loadLocalEnv(path.join(__dirname, ".local", "service.env"));
+
 const agentStore = require("./lib/agent-store");
 const codexBridge = require("./lib/codex-bridge");
 const codexCatalog = require("./lib/codex-catalog");
@@ -69,6 +72,46 @@ const MIME_TYPES = new Map([
 const rateBuckets = new Map();
 let failedPinAttempts = 0;
 let shutdownScheduled = false;
+
+function loadLocalEnv(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  const file = fs.readFileSync(filePath, "utf8");
+
+  for (const rawLine of file.split(/\r?\n/)) {
+    const line = rawLine.trim();
+
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const separator = line.indexOf("=");
+
+    if (separator <= 0) {
+      throw new Error(`Invalid local env line: ${line}`);
+    }
+
+    const name = line.slice(0, separator).trim();
+    let value = line.slice(separator + 1).trim();
+
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      throw new Error(`Invalid local env variable name: ${name}`);
+    }
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (process.env[name] === undefined) {
+      process.env[name] = value;
+    }
+  }
+}
 
 class HttpError extends Error {
   constructor(status, message) {
