@@ -4,6 +4,8 @@ param(
   [string]$Text = "",
   [string]$TargetLabel = "",
   [string]$TargetTitle = "",
+  [string]$ProjectLabel = "",
+  [string]$Workspace = "",
   [string]$NewChat = "false",
   [string]$Submit = "true",
   [string]$Highlight = "true",
@@ -584,6 +586,188 @@ function Select-TargetChat {
   throw "Codex chat '$Label' was not visible in the sidebar."
 }
 
+function Add-NormalizedQuery {
+  param($Queries, [string]$Value)
+
+  $normalized = Normalize-MatchText $Value
+
+  if ($normalized -and -not $Queries.Contains($normalized)) {
+    [void]$Queries.Add($normalized)
+  }
+}
+
+function Get-ProjectQueries {
+  param([string]$Label, [string]$WorkspacePath)
+
+  $queries = New-Object System.Collections.ArrayList
+
+  Add-NormalizedQuery $queries $Label
+
+  if (-not [string]::IsNullOrWhiteSpace($Label)) {
+    $parts = $Label -split "\s*/\s*"
+    Add-NormalizedQuery $queries ($parts[$parts.Count - 1])
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($WorkspacePath)) {
+    Add-NormalizedQuery $queries $WorkspacePath
+    Add-NormalizedQuery $queries (Split-Path -Path $WorkspacePath -Leaf)
+  }
+
+  return ,$queries
+}
+
+function Test-ProjectNameMatch {
+  param([string]$NormalizedName, $Queries)
+
+  if (-not $NormalizedName) {
+    return $false
+  }
+
+  foreach ($query in $Queries) {
+    if ($NormalizedName -eq $query -or $NormalizedName.Contains($query)) {
+      return $true
+    }
+  }
+
+  return $false
+}
+
+function Find-ProjectElement {
+  param($Root, [string]$Label, [string]$WorkspacePath)
+
+  $queries = Get-ProjectQueries $Label $WorkspacePath
+
+  if ($queries.Count -lt 1) {
+    return $null
+  }
+
+  $all = Get-Descendants $Root
+  $rootRect = $Root.Current.BoundingRectangle
+  $candidates = @()
+
+  for ($i = 0; $i -lt $all.Count; $i++) {
+    $element = $all.Item($i)
+    $current = $element.Current
+    $rect = $current.BoundingRectangle
+    $name = [string]$current.Name
+    $normalizedName = Normalize-MatchText $name
+    $isSidebarItem =
+      $rect.X -lt ($rootRect.X + 420) -and
+      $rect.Width -gt 40 -and
+      $rect.Height -gt 12 -and
+      (
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::Button -or
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -or
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::TreeItem -or
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::Text
+      )
+
+    if (-not $isSidebarItem -or -not (Test-ProjectNameMatch $normalizedName $queries)) {
+      continue
+    }
+
+    if ($normalizedName -in @("new chat", "new conversation", "new thread", "show more", "show all projects")) {
+      continue
+    }
+
+    $score = 1000
+
+    foreach ($query in $queries) {
+      if ($normalizedName -eq $query) {
+        $score -= 500
+        break
+      }
+    }
+
+    if ($rect.X -lt ($rootRect.X + 260)) {
+      $score -= 120
+    }
+
+    $score += [Math]::Max(0, [int]($rect.Y - $rootRect.Y))
+
+    $candidates += [pscustomobject]@{
+      Element = $element
+      Score = $score
+    }
+  }
+
+  if ($candidates.Count -lt 1) {
+    return $null
+  }
+
+  return ($candidates | Sort-Object Score | Select-Object -First 1).Element
+}
+
+function Find-SidebarElementByName {
+  param($Root, [string[]]$Names)
+
+  $normalizedNames = $Names | ForEach-Object { Normalize-MatchText $_ } | Where-Object { $_ }
+  $all = Get-Descendants $Root
+  $rootRect = $Root.Current.BoundingRectangle
+  $candidates = @()
+
+  for ($i = 0; $i -lt $all.Count; $i++) {
+    $element = $all.Item($i)
+    $current = $element.Current
+    $rect = $current.BoundingRectangle
+    $normalizedName = Normalize-MatchText ([string]$current.Name)
+    $isSidebarItem =
+      $current.IsEnabled -and
+      $rect.X -lt ($rootRect.X + 420) -and
+      $rect.Width -gt 40 -and
+      $rect.Height -gt 12 -and
+      (
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::Button -or
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -or
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::Text
+      )
+
+    if (-not $isSidebarItem -or $normalizedName -notin $normalizedNames) {
+      continue
+    }
+
+    $candidates += [pscustomobject]@{
+      Element = $element
+      Score = [Math]::Max(0, [int]($rect.Y - $rootRect.Y))
+    }
+  }
+
+  if ($candidates.Count -lt 1) {
+    return $null
+  }
+
+  return ($candidates | Sort-Object Score | Select-Object -First 1).Element
+}
+
+function Select-TargetProject {
+  param($Root, [string]$Label, [string]$WorkspacePath)
+
+  if ([string]::IsNullOrWhiteSpace($Label) -and [string]::IsNullOrWhiteSpace($WorkspacePath)) {
+    return ""
+  }
+
+  $projectElement = Find-ProjectElement $Root $Label $WorkspacePath
+
+  if (-not $projectElement) {
+    $showAllProjects = Find-SidebarElementByName $Root @("show all projects")
+
+    if ($showAllProjects) {
+      Invoke-Element $showAllProjects
+      Start-Sleep -Milliseconds 650
+      $projectElement = Find-ProjectElement $Root $Label $WorkspacePath
+    }
+  }
+
+  if (-not $projectElement) {
+    $display = if ([string]::IsNullOrWhiteSpace($Label)) { $WorkspacePath } else { $Label }
+    throw "Codex project '$display' was not visible in the sidebar. New chat was not created."
+  }
+
+  Invoke-Element $projectElement
+  Start-Sleep -Milliseconds 650
+  return [string]$projectElement.Current.Name
+}
+
 function Find-NewChatButton {
   param($Root)
 
@@ -776,8 +960,10 @@ try {
   }
 
   $newChatStarted = $false
+  $projectName = ""
 
   if ($ShouldCreateNewChat) {
+    $projectName = Select-TargetProject $window.Root $ProjectLabel $Workspace
     $chatTitle = Invoke-NewChat $window.Root
   } else {
     $chatTitle = Select-TargetChat $window.Root $TargetLabel $TargetTitle
@@ -833,6 +1019,8 @@ try {
     windowTitle = $window.Process.MainWindowTitle
     chatTitle = $chatTitle
     targetLabel = $TargetLabel
+    projectLabel = $ProjectLabel
+    projectName = $projectName
     composer = $composerInfo
   })
   exit 0
