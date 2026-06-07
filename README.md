@@ -25,6 +25,7 @@ The core idea is simple: keep the serious compute, credentials, editor state, an
 - [Setup](docs/setup.md)
 - [Goals and Decisions](docs/goals-and-decisions.md)
 - [Agent Bridge](docs/agent-bridge.md)
+- [TypeScript Migration](docs/typescript-migration.md)
 
 ## UI App
 
