@@ -1,8 +1,11 @@
+import type { JsonRecord } from "./types";
+
 const crypto = require("crypto");
 const fsp = require("fs/promises");
 const path = require("path");
 
-const PROJECT_ROOT = path.resolve(__dirname, "..");
+const { PROJECT_ROOT } = require("./project-root");
+
 const LOCAL_DIR = path.join(PROJECT_ROOT, ".local");
 const AGENT_COMMANDS_PATH =
   process.env.AGENT_COMMANDS_PATH ||
@@ -154,7 +157,7 @@ function defaultAgentTarget() {
   });
 }
 
-function normalizeAgentTarget(input = {}) {
+function normalizeAgentTarget(input: JsonRecord = {}) {
   const provider = cleanProvider(input.provider || input.agent);
   const workspace = normalizeWorkspace(
     input.workspace || input.workspacePath || input.project || process.env.AGENT_WORKSPACE || PROJECT_ROOT,
@@ -237,7 +240,7 @@ async function setActiveTarget(target) {
   return activeTarget;
 }
 
-function normalizeReplyPreferences(input = {}) {
+function normalizeReplyPreferences(input: JsonRecord = {}) {
   const enabled = input.enabled !== false;
   const requestedMaxWords = Number(input.maxWords || input.max_words || DEFAULT_CONCISE_REPLY_WORDS);
   const maxWords =
@@ -263,17 +266,17 @@ async function getReplyPreferences() {
   return state.replyPreferences || normalizeReplyPreferences({ enabled: false });
 }
 
-async function setReplyPreferences(preferences = {}) {
+async function setReplyPreferences(preferences: JsonRecord = {}) {
   const replyPreferences = normalizeReplyPreferences(preferences);
   await updateAgentState({ replyPreferences });
   return replyPreferences;
 }
 
-function compactRecord(record) {
+function compactRecord(record: JsonRecord) {
   return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined && value !== ""));
 }
 
-async function appendCommand(command) {
+async function appendCommand(command: JsonRecord) {
   const text = sanitizeText(command.text, "Command text", MAX_COMMAND_TEXT_CHARS);
   const userText = sanitizeText(command.userText, "User text", MAX_COMMAND_TEXT_CHARS);
 
@@ -299,7 +302,7 @@ async function appendCommand(command) {
   return record;
 }
 
-async function appendEvent(event) {
+async function appendEvent(event: JsonRecord) {
   const text = sanitizeText(event.text, "Event text", MAX_EVENT_TEXT_CHARS);
 
   if (!text) {
@@ -333,7 +336,7 @@ async function appendEvent(event) {
   return record;
 }
 
-async function readJsonl(filePath, options = {}) {
+async function readJsonl(filePath: string, options: JsonRecord = {}) {
   const afterOption = String(options.after || "").toLowerCase();
   const parsedAfter = Number(options.after || 0);
   const after =

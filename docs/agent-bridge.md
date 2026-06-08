@@ -118,7 +118,7 @@ For Codex delivery, `text` is agent-facing and is prefixed with a short Work in 
 
 ## HTTP Surface
 
-The frontend UI and backend API share one HTTP server. The React/TypeScript source lives in `ui/`, builds to `dist/app`, and is served by `server.js`. Its default local port is `38173`; use the `3817x` range for Work in the Sun web surfaces when a separate UI or helper server is added.
+The frontend UI and backend API share one HTTP server. The React/TypeScript source lives in `ui/` and builds to `dist/app`; the backend TypeScript source builds to `dist/server`. Its default local port is `38173`; use the `3817x` range for Work in the Sun web surfaces when a separate UI or helper server is added.
 
 - `GET /api/agent/target`
 - `POST /api/agent/target`
@@ -168,10 +168,10 @@ Run the local MCP server with:
 npm run mcp
 ```
 
-Agent configuration should launch:
+For agent configuration, run `npm run backend:build` after source updates, then launch:
 
 ```powershell
-node F:\projects\work-in-the-sun\mcp-server.js
+node F:\projects\work-in-the-sun\dist\server\mcp-server.js
 ```
 
 Exposed MCP tools:

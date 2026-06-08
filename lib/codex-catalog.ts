@@ -1,3 +1,5 @@
+import type { JsonRecord } from "./types";
+
 const fs = require("fs");
 const fsp = require("fs/promises");
 const os = require("os");
@@ -68,7 +70,7 @@ function finiteNumber(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
-function pageOptions(options = {}) {
+function pageOptions(options: JsonRecord = {}) {
   const after = finiteNumber(options.after, 0);
   const limit = finiteNumber(options.limit, DEFAULT_LIMIT);
 
@@ -141,11 +143,11 @@ function cleanThreadName(value) {
   return name;
 }
 
-function recordMs(record) {
+function recordMs(record: JsonRecord) {
   return Date.parse(record?.receivedAt || record?.updatedAt || "") || 0;
 }
 
-function extractThreadId(target = {}) {
+function extractThreadId(target: JsonRecord = {}) {
   const candidates = [target.sessionHint, target.threadId, target.id, target.route, target.label]
     .filter(Boolean)
     .map(String);
@@ -161,7 +163,7 @@ function extractThreadId(target = {}) {
   return "";
 }
 
-function targetTitleCandidates(target = {}) {
+function targetTitleCandidates(target: JsonRecord = {}) {
   const values = [target.route, target.sessionHint, target.label]
     .filter(Boolean)
     .map(String)
@@ -200,7 +202,7 @@ function busyCommandsBefore(commands, beforeMs) {
     .sort((a, b) => a.receivedMs - b.receivedMs);
 }
 
-function applyActivityEvent(activity, threadId, event, options = {}) {
+function applyActivityEvent(activity: Map<string, JsonRecord>, threadId: string, event: JsonRecord, options: JsonRecord = {}) {
   if (!threadId) {
     return;
   }
@@ -319,7 +321,7 @@ async function threadActivityIndex() {
   return activity;
 }
 
-function configuredProjectLabel(root, labels = {}) {
+function configuredProjectLabel(root: string, labels: JsonRecord = {}) {
   const directLabel = labels[root] || labels[path.resolve(root)];
 
   if (directLabel) {
@@ -330,7 +332,7 @@ function configuredProjectLabel(root, labels = {}) {
   return Object.entries(labels).find(([labelRoot]) => path.resolve(labelRoot).toLowerCase() === normalizedRoot)?.[1];
 }
 
-function projectLabel(root, labels = {}) {
+function projectLabel(root: string, labels: JsonRecord = {}) {
   const configuredLabel = configuredProjectLabel(root, labels);
 
   if (configuredLabel) {
@@ -340,7 +342,7 @@ function projectLabel(root, labels = {}) {
   return humanizeName(path.basename(root)) || root;
 }
 
-function projectRecord(root, labels = {}) {
+function projectRecord(root: string, labels: JsonRecord = {}) {
   return {
     id: root,
     label: projectLabel(root, labels),
@@ -348,7 +350,7 @@ function projectRecord(root, labels = {}) {
   };
 }
 
-function uniqueRoots(state) {
+function uniqueRoots(state: JsonRecord) {
   const sources = [
     state["project-order"],
     state["active-workspace-roots"],
@@ -514,7 +516,7 @@ async function readCodexState() {
   return readJsonFile(GLOBAL_STATE_PATH, {});
 }
 
-async function listProjects(options = {}) {
+async function listProjects(options: JsonRecord = {}) {
   const state = await readCodexState();
   const projects = await codexProjects(state);
   const { after, limit } = pageOptions(options);
@@ -569,7 +571,7 @@ async function readSessionIndexLines() {
   return { lines, hasTrailingNewline };
 }
 
-function findSessionLine(lines, target = {}) {
+function findSessionLine(lines: string[], target: JsonRecord = {}) {
   const threadId = extractThreadId(target);
   const candidates = targetTitleCandidates(target);
   const titleMatches = [];
@@ -660,7 +662,7 @@ async function sessionFileIndex() {
   return index;
 }
 
-function readFirstLine(filePath) {
+function readFirstLine(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const stream = fs.createReadStream(filePath, { encoding: "utf8" });
     let buffer = "";
@@ -679,7 +681,7 @@ function readFirstLine(filePath) {
   });
 }
 
-async function readSessionMetaWorkspace(filePath) {
+async function readSessionMetaWorkspace(filePath: string) {
   try {
     const line = await readFirstLine(filePath);
     const record = JSON.parse(line);
@@ -689,7 +691,7 @@ async function readSessionMetaWorkspace(filePath) {
   }
 }
 
-async function enrichSessionWorkspaces(sessions, options = {}) {
+async function enrichSessionWorkspaces(sessions: JsonRecord[], options: JsonRecord = {}) {
   const targets = options.refresh ? sessions : sessions.filter((session) => !session.workspace);
 
   if (!targets.length) {
@@ -724,7 +726,7 @@ function sameOrChildWorkspace(workspace, projectWorkspace) {
   );
 }
 
-async function listChats(options = {}) {
+async function listChats(options: JsonRecord = {}) {
   const [state, sessions] = await Promise.all([readCodexState(), readSessions()]);
   const labels = state["electron-workspace-root-labels"] || {};
   const workspaceHints = state["thread-workspace-root-hints"] || {};
@@ -783,7 +785,7 @@ async function listChats(options = {}) {
   };
 }
 
-async function renameChat(target = {}, name) {
+async function renameChat(target: JsonRecord = {}, name: string) {
   const threadName = cleanThreadName(name);
   const { lines, hasTrailingNewline } = await readSessionIndexLines();
   const { index, session } = findSessionLine(lines, target);

@@ -1,24 +1,28 @@
+import type { JsonRecord } from "./types";
+
 const { spawn } = require("child_process");
 const path = require("path");
 const codexBridge = require("./codex-bridge");
+const { PROJECT_ROOT } = require("./project-root");
+type PowerShellResult = { stdout: string; stderr: string };
 
-const ACTIVE_WINDOW_SCRIPT = path.join(__dirname, "..", "scripts", "window-screenshot.ps1");
+const ACTIVE_WINDOW_SCRIPT = path.join(PROJECT_ROOT, "scripts", "window-screenshot.ps1");
 const SCREENSHOT_TIMEOUT_MS = finitePositiveNumber(process.env.WITS_SCREENSHOT_TIMEOUT_MS, 45_000);
 const SCREENSHOT_OUTPUT_BYTES = finitePositiveNumber(
   process.env.WITS_SCREENSHOT_OUTPUT_BYTES,
   32 * 1024 * 1024,
 );
 
-function finitePositiveNumber(value, fallback) {
+function finitePositiveNumber(value: unknown, fallback: number): number {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
-function isCodexTarget(target = {}) {
+function isCodexTarget(target: JsonRecord = {}) {
   return String(target.provider || "").toLowerCase() === "codex";
 }
 
-function runPowerShell(args, options = {}) {
+function runPowerShell(args: string[], options: JsonRecord = {}): Promise<PowerShellResult> {
   return new Promise((resolve, reject) => {
     const timeoutMs = options.timeoutMs || SCREENSHOT_TIMEOUT_MS;
     const maxOutputBytes = options.maxOutputBytes || SCREENSHOT_OUTPUT_BYTES;
@@ -39,7 +43,7 @@ function runPowerShell(args, options = {}) {
       child.kill();
     }, timeoutMs);
 
-    function settle(callback, value) {
+    function settle(callback: (value: any) => void, value: any) {
       if (settled) {
         return;
       }
@@ -49,7 +53,7 @@ function runPowerShell(args, options = {}) {
       callback(value);
     }
 
-    function appendOutput(current, chunk) {
+    function appendOutput(current: string, chunk: Buffer) {
       if (Buffer.byteLength(current) + chunk.length > maxOutputBytes) {
         outputTooLarge = true;
         child.kill();
@@ -87,7 +91,7 @@ function runPowerShell(args, options = {}) {
   });
 }
 
-function parseScreenshotResult(output) {
+function parseScreenshotResult(output: string) {
   let parsed;
 
   try {
@@ -121,13 +125,13 @@ async function captureActiveWindow() {
       "-File",
       ACTIVE_WINDOW_SCRIPT,
     ],
-    { cwd: path.join(__dirname, "..") },
+    { cwd: PROJECT_ROOT },
   );
 
   return parseScreenshotResult(result.stdout);
 }
 
-async function captureForTarget(target = {}) {
+async function captureForTarget(target: JsonRecord = {}) {
   if (isCodexTarget(target) && codexBridge.screenshotRoute(target).accepted) {
     return codexBridge.captureTargetScreenshot(target);
   }

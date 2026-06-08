@@ -1,8 +1,28 @@
+import type { JsonRecord } from "./types";
+
 const { spawn } = require("child_process");
 const fsp = require("fs/promises");
 const os = require("os");
 const path = require("path");
 const agentStore = require("./agent-store");
+const { PROJECT_ROOT } = require("./project-root");
+
+type BridgeRoute = JsonRecord & {
+  accepted: boolean;
+  mode?: string;
+  reason?: string;
+  threadId?: string;
+};
+type PowerShellResult = { stdout: string; stderr: string };
+type PendingRequest = {
+  method: string;
+  resolve: (result: any) => void;
+  reject: (error: any) => void;
+};
+type TurnWaiter = {
+  resolve: (turn: any) => void;
+  reject: (error: any) => void;
+};
 
 const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const WINDOWS_UI_MODE = "windows-ui";
@@ -15,7 +35,7 @@ const DIRECT_SEND_ENABLED = !["0", "false", "off"].includes(
 );
 const REQUEST_TIMEOUT_MS = Number(process.env.CODEX_APP_SERVER_REQUEST_TIMEOUT_MS || 60_000);
 const TURN_TIMEOUT_MS = Number(process.env.CODEX_DIRECT_TURN_TIMEOUT_MS || 30 * 60_000);
-const UI_SCRIPT = path.join(__dirname, "..", "scripts", "codex-ui-bridge.ps1");
+const UI_SCRIPT = path.join(PROJECT_ROOT, "scripts", "codex-ui-bridge.ps1");
 const UI_OUTPUT_POLL_MS = Number(process.env.CODEX_UI_OUTPUT_POLL_MS || 2500);
 const UI_OUTPUT_TIMEOUT_MS = Number(process.env.CODEX_UI_OUTPUT_TIMEOUT_MS || 120_000);
 const UI_OUTPUT_MAX_EVENTS = Number(process.env.CODEX_UI_OUTPUT_MAX_EVENTS || 6);
@@ -42,22 +62,22 @@ const UI_COMMAND_PREFIX_ENABLED = !["0", "false", "off"].includes(
 const ESSENTIAL_BRIDGE_LEVELS = new Set(["warning", "error"]);
 
 let dispatchChain = Promise.resolve();
-let codexCliPromise = null;
+let codexCliPromise: Promise<string> | null = null;
 
-function finitePositiveNumber(value, fallback) {
+function finitePositiveNumber(value: unknown, fallback: number): number {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
-function compact(value) {
+function compact(value: JsonRecord) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined && item !== ""));
 }
 
-function isCodexTarget(target = {}) {
+function isCodexTarget(target: JsonRecord = {}) {
   return String(target.provider || "").toLowerCase() === "codex";
 }
 
-function extractThreadId(target = {}) {
+function extractThreadId(target: JsonRecord = {}) {
   const candidates = [target.sessionHint, target.threadId, target.id, target.route, target.label]
     .filter(Boolean)
     .map(String);
@@ -73,11 +93,11 @@ function extractThreadId(target = {}) {
   return "";
 }
 
-function isCurrentUiTarget(target = {}) {
+function isCurrentUiTarget(target: JsonRecord = {}) {
   return [target.route, target.sessionHint, target.label].some((value) => /^current$/i.test(String(value || "")));
 }
 
-function codexUiTargetLabel(target = {}) {
+function codexUiTargetLabel(target: JsonRecord = {}) {
   if (isCurrentUiTarget(target)) {
     return "";
   }
@@ -86,7 +106,7 @@ function codexUiTargetLabel(target = {}) {
   return label;
 }
 
-function codexUiTargetTitle(target = {}) {
+function codexUiTargetTitle(target: JsonRecord = {}) {
   if (isCurrentUiTarget(target)) {
     return "";
   }
@@ -95,7 +115,7 @@ function codexUiTargetTitle(target = {}) {
   return title;
 }
 
-function codexUiProjectLabel(target = {}) {
+function codexUiProjectLabel(target: JsonRecord = {}) {
   for (const value of [target.route, target.sessionHint, target.label]) {
     const text = String(value || "").trim();
 
@@ -116,7 +136,7 @@ function codexUiProjectLabel(target = {}) {
   return "";
 }
 
-function dispatchRoute(command) {
+function dispatchRoute(command: JsonRecord): BridgeRoute {
   const target = command.target || {};
   const deliveryMode = String(target.deliveryMode || "").toLowerCase();
   const useWindowsUi = deliveryMode === WINDOWS_UI_MODE || (!deliveryMode && DELIVERY_MODE === WINDOWS_UI_MODE);
@@ -141,7 +161,7 @@ function dispatchRoute(command) {
         newChat: true,
         projectLabel: codexUiProjectLabel(target),
         projectWorkspace: target.workspace,
-      });
+      }) as BridgeRoute;
     }
 
     return { accepted: true, mode: "new" };
@@ -179,7 +199,7 @@ function dispatchRoute(command) {
   return { accepted: true, mode: "existing", threadId };
 }
 
-function screenshotRoute(target = {}) {
+function screenshotRoute(target: JsonRecord = {}): BridgeRoute {
   if (!isCodexTarget(target)) {
     return { accepted: false, reason: "not-codex" };
   }
@@ -200,7 +220,7 @@ function screenshotRoute(target = {}) {
   };
 }
 
-async function isFile(filePath) {
+async function isFile(filePath: string) {
   try {
     return (await fsp.stat(filePath)).isFile();
   } catch {
@@ -264,14 +284,14 @@ async function findCodexCli() {
   return codexCliPromise;
 }
 
-function textInput(text) {
+function textInput(text: string) {
   return {
     type: "text",
     text,
   };
 }
 
-function agentCommandText(command = {}) {
+function agentCommandText(command: JsonRecord | string = {}) {
   const text = String(typeof command === "string" ? command : command.text || "").trim();
 
   if (
@@ -285,7 +305,7 @@ function agentCommandText(command = {}) {
   return `${UI_COMMAND_PREFIX}\n${text}`;
 }
 
-function compactLabelText(value, maxChars = MAX_TARGET_LABEL_CHARS) {
+function compactLabelText(value: unknown, maxChars = MAX_TARGET_LABEL_CHARS) {
   const limit = Math.max(0, Number(maxChars) || 0);
   const text = String(value || "")
     .replace(/\0/g, "")
@@ -304,13 +324,13 @@ function compactLabelText(value, maxChars = MAX_TARGET_LABEL_CHARS) {
   return `${text.slice(0, limit - 3).trimEnd()}...`;
 }
 
-function codexCurrentChatLabel(chatTitle) {
+function codexCurrentChatLabel(chatTitle: unknown) {
   const prefix = "Codex / ";
   const title = compactLabelText(chatTitle, MAX_TARGET_LABEL_CHARS - prefix.length);
   return title ? `${prefix}${title}` : "Codex current chat";
 }
 
-function targetForThread(command, threadId, previousTarget) {
+function targetForThread(command: JsonRecord, threadId: string, previousTarget: JsonRecord) {
   return {
     ...previousTarget,
     id: `codex:${threadId}`,
@@ -324,7 +344,7 @@ function targetForThread(command, threadId, previousTarget) {
   };
 }
 
-function targetForCurrentDesktopChat(command, result = {}) {
+function targetForCurrentDesktopChat(command: JsonRecord, result: JsonRecord = {}) {
   const previousTarget = command.target || {};
 
   return {
@@ -338,13 +358,13 @@ function targetForCurrentDesktopChat(command, result = {}) {
   };
 }
 
-function commandRequestsConciseReplies(command = {}) {
+function commandRequestsConciseReplies(command: JsonRecord = {}) {
   const text = String(command.text || "");
   const userText = String(command.userText || "");
   return text.includes(UI_CONCISE_TOOL_HINT) || userText.includes(UI_CONCISE_TOOL_HINT);
 }
 
-async function shouldSuppressBridgeRelay(command = {}, event = {}) {
+async function shouldSuppressBridgeRelay(command: JsonRecord = {}, event: JsonRecord = {}) {
   if (event.allowInConcise === true || ESSENTIAL_BRIDGE_LEVELS.has(event.level)) {
     return false;
   }
@@ -361,7 +381,7 @@ async function shouldSuppressBridgeRelay(command = {}, event = {}) {
   }
 }
 
-async function appendBridgeEvent(command, event) {
+async function appendBridgeEvent(command: JsonRecord, event: JsonRecord) {
   if (await shouldSuppressBridgeRelay(command, event)) {
     return null;
   }
@@ -374,11 +394,11 @@ async function appendBridgeEvent(command, event) {
   });
 }
 
-function delay(ms) {
+function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function runPowerShell(args, options = {}) {
+function runPowerShell(args: string[], options: JsonRecord = {}): Promise<PowerShellResult> {
   return new Promise((resolve, reject) => {
     const timeoutMs = options.timeoutMs || UI_BRIDGE_TIMEOUT_MS;
     const maxOutputBytes = options.maxOutputBytes || UI_BRIDGE_OUTPUT_BYTES;
@@ -399,7 +419,7 @@ function runPowerShell(args, options = {}) {
       child.kill();
     }, timeoutMs);
 
-    function settle(callback, value) {
+    function settle(callback: (value: any) => void, value: any) {
       if (settled) {
         return;
       }
@@ -409,7 +429,7 @@ function runPowerShell(args, options = {}) {
       callback(value);
     }
 
-    function appendOutput(current, chunk) {
+    function appendOutput(current: string, chunk: Buffer) {
       if (Buffer.byteLength(current) + chunk.length > maxOutputBytes) {
         outputTooLarge = true;
         child.kill();
@@ -447,7 +467,7 @@ function runPowerShell(args, options = {}) {
   });
 }
 
-async function runUiBridge(action, options = {}, runOptions = {}) {
+async function runUiBridge(action: string, options: JsonRecord = {}, runOptions: JsonRecord = {}) {
   const args = [
     "-STA",
     "-NoProfile",
@@ -496,7 +516,7 @@ async function runUiBridge(action, options = {}, runOptions = {}) {
   }
 
   try {
-    const result = await runPowerShell(args, { cwd: path.join(__dirname, ".."), ...runOptions });
+    const result = await runPowerShell(args, { cwd: PROJECT_ROOT, ...runOptions });
     const parsed = JSON.parse(result.stdout.trim());
 
     if (!parsed.ok) {
@@ -526,7 +546,7 @@ async function runUiBridge(action, options = {}, runOptions = {}) {
   }
 }
 
-async function captureTargetScreenshot(target = {}) {
+async function captureTargetScreenshot(target: JsonRecord = {}) {
   const route = screenshotRoute(target);
 
   if (!route.accepted) {
@@ -658,7 +678,17 @@ async function dispatchUiNow(command, route) {
 }
 
 class CodexAppServerClient {
-  constructor(command) {
+  command: JsonRecord;
+  buffer: string;
+  child: any;
+  nextId: number;
+  pending: Map<number, PendingRequest>;
+  turnWaiters: Map<string, TurnWaiter>;
+  completedTurns: Map<string, any>;
+  agentMessages: Map<string, string>;
+  stderr: string;
+
+  constructor(command: JsonRecord) {
     this.command = command;
     this.buffer = "";
     this.child = null;
@@ -709,11 +739,11 @@ class CodexAppServerClient {
     }
   }
 
-  notify(method, params) {
+  notify(method: string, params?: any) {
     this.write(compact({ method, params }));
   }
 
-  request(method, params, options = {}) {
+  request(method: string, params?: any, options: JsonRecord = {}): Promise<any> {
     const id = this.nextId;
     this.nextId += 1;
 
@@ -742,7 +772,7 @@ class CodexAppServerClient {
     });
   }
 
-  write(message) {
+  write(message: JsonRecord) {
     if (!this.child?.stdin?.writable) {
       return;
     }
@@ -750,7 +780,7 @@ class CodexAppServerClient {
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
-  handleStdout(chunk) {
+  handleStdout(chunk: string) {
     this.buffer = tail(this.buffer + chunk, APP_SERVER_BUFFER_CHARS);
     const lines = this.buffer.split(/\r?\n/);
     this.buffer = lines.pop() || "";
@@ -760,7 +790,7 @@ class CodexAppServerClient {
       .forEach((line) => this.handleLine(line));
   }
 
-  handleLine(line) {
+  handleLine(line: string) {
     let message;
 
     try {
@@ -800,7 +830,7 @@ class CodexAppServerClient {
     }
   }
 
-  async handleServerRequest(message) {
+  async handleServerRequest(message: JsonRecord) {
     const method = message.method;
 
     if (method === "item/commandExecution/requestApproval") {
@@ -830,7 +860,7 @@ class CodexAppServerClient {
     });
   }
 
-  async handleNotification(message) {
+  async handleNotification(message: JsonRecord) {
     const params = message.params || {};
 
     switch (message.method) {
@@ -869,7 +899,7 @@ class CodexAppServerClient {
     }
   }
 
-  async handleCompletedItem(item) {
+  async handleCompletedItem(item: JsonRecord) {
     if (item.type !== "agentMessage") {
       return;
     }
@@ -886,7 +916,7 @@ class CodexAppServerClient {
     });
   }
 
-  waitForTurn(turnId) {
+  waitForTurn(turnId: string) {
     if (this.completedTurns.has(turnId)) {
       return Promise.resolve(this.completedTurns.get(turnId));
     }
@@ -910,7 +940,7 @@ class CodexAppServerClient {
     });
   }
 
-  resolveTurn(turnId, turn) {
+  resolveTurn(turnId: string, turn: any) {
     const waiter = this.turnWaiters.get(turnId);
 
     if (!waiter) {
@@ -921,7 +951,7 @@ class CodexAppServerClient {
     waiter.resolve(turn);
   }
 
-  rejectAll(error) {
+  rejectAll(error: any) {
     for (const pending of this.pending.values()) {
       pending.reject(error);
     }
@@ -935,7 +965,7 @@ class CodexAppServerClient {
   }
 }
 
-async function resolveThread(client, command, route) {
+async function resolveThread(client: CodexAppServerClient, command: JsonRecord, route: JsonRecord) {
   const target = command.target || {};
 
   if (route.mode === "new") {
@@ -970,7 +1000,7 @@ async function resolveThread(client, command, route) {
   return route.threadId;
 }
 
-async function dispatchNow(command, route) {
+async function dispatchNow(command: JsonRecord, route: JsonRecord) {
   if (route.mode === WINDOWS_UI_MODE) {
     try {
       await dispatchUiNow(command, route);
@@ -1013,7 +1043,7 @@ async function dispatchNow(command, route) {
   }
 }
 
-function dispatch(command) {
+function dispatch(command: JsonRecord) {
   const route = dispatchRoute(command);
 
   if (!route.accepted) {

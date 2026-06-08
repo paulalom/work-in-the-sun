@@ -41,7 +41,7 @@ Run the desktop-hosted web app:
 npm run dev
 ```
 
-The React/TypeScript frontend source lives in `ui/` and builds to `dist/app` before the backend starts. The app still serves both the frontend UI and backend API from one HTTP server. By default it listens on `127.0.0.1:38173`; keep the `3817x` range reserved for Work in the Sun local web surfaces so it is easy to spot in process and port listings. Override with `WITS_HTTP_PORT` or `PORT` when needed.
+The frontend TypeScript source lives in `ui/` and builds to `dist/app`; the backend TypeScript source builds to `dist/server`. The app still serves both the frontend UI and backend API from one HTTP server. By default it listens on `127.0.0.1:38173`; keep the `3817x` range reserved for Work in the Sun local web surfaces so it is easy to spot in process and port listings. Override with `WITS_HTTP_PORT` or `PORT` when needed.
 
 For frontend-only iteration, run Vite on the adjacent development port:
 
@@ -89,7 +89,7 @@ npm run service:install
 npm run service:start
 ```
 
-This tries to create a Scheduled Task named `WorkInTheSunBackend`. If Windows denies task registration, it falls back to a current-user Startup entry at `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\WorkInTheSunBackend.cmd`. Both paths run `scripts/backend-service-runner.ps1`, build the frontend with `npm run ui:build`, log to `.local/backend-service.log`, read optional machine-specific environment values from `.local/service.env`, and refuse to start if `.local/pin-lockout.json` exists.
+This tries to create a Scheduled Task named `WorkInTheSunBackend`. If Windows denies task registration, it falls back to a current-user Startup entry at `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\WorkInTheSunBackend.cmd`. Both paths run `scripts/backend-service-runner.ps1`, build the app with `npm run build`, log to `.local/backend-service.log`, read optional machine-specific environment values from `.local/service.env`, and refuse to start if `.local/pin-lockout.json` exists.
 
 Example `.local/service.env`:
 

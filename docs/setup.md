@@ -5,7 +5,7 @@ This project has two local surfaces:
 - the Work in the Sun web backend, which serves the phone/tablet UI and HTTP API;
 - the Work in the Sun MCP server, which lets desktop agents report progress and read the command bridge state.
 
-The MCP server is not discovered just because `mcp-server.js` exists in the project. The desktop agent host must be configured to launch or connect to it.
+The MCP server is not discovered just because this project defines one. The desktop agent host must be configured to launch or connect to it.
 
 ## Terminology
 
@@ -32,7 +32,7 @@ Start the backend locally:
 npm run dev
 ```
 
-The frontend source lives in `ui/` and builds to `dist/app` before the backend starts. The backend serves the built frontend UI and API from one HTTP server. The default bind is `127.0.0.1:38173`; keep the `3817x` range reserved for Work in the Sun local web surfaces. Set `WITS_HTTP_PORT` or `PORT` to override it.
+The frontend source lives in `ui/` and builds to `dist/app`; the backend source builds to `dist/server`. The backend serves the built frontend UI and API from one HTTP server. The default bind is `127.0.0.1:38173`; keep the `3817x` range reserved for Work in the Sun local web surfaces. Set `WITS_HTTP_PORT` or `PORT` to override it.
 
 For frontend-only iteration, run:
 
@@ -102,10 +102,10 @@ The MCP server is a stdio process:
 npm run mcp
 ```
 
-That command is useful for manual testing. For normal agent use, configure the agent host to launch:
+That command is useful for manual testing. For normal agent use, run `npm run backend:build` after source updates, then configure the agent host to launch:
 
 ```powershell
-node F:\projects\work-in-the-sun\mcp-server.js
+node F:\projects\work-in-the-sun\dist\server\mcp-server.js
 ```
 
 The server exposes:
@@ -122,7 +122,7 @@ Codex Desktop reads MCP server configuration from `%USERPROFILE%\.codex\config.t
 
 ```toml
 [mcp_servers.work_in_the_sun]
-args = ['F:\projects\work-in-the-sun\mcp-server.js']
+args = ['F:\projects\work-in-the-sun\dist\server\mcp-server.js']
 command = 'C:\Program Files\nodejs\node.exe'
 startup_timeout_sec = 30
 
@@ -139,12 +139,14 @@ Expected Codex-side tool names are usually namespaced by server, such as `mcp__w
 To check that the server itself works independently of Codex, send a tiny JSON-RPC conversation:
 
 ```powershell
+npm run backend:build
+
 $messages = @(
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"manual-check","version":"0"}}}',
   '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 ) -join "`n"
 
-$messages | node F:\projects\work-in-the-sun\mcp-server.js
+$messages | node F:\projects\work-in-the-sun\dist\server\mcp-server.js
 ```
 
 If that lists the tools but Codex cannot use them, the MCP server is working and the problem is Codex host configuration, startup, or session reload.

@@ -93,26 +93,26 @@ try {
     }
 
     if ($npmCommand) {
-        Write-ServiceLog "Building frontend UI with $($npmCommand.Source) run ui:build."
+        Write-ServiceLog "Building app with $($npmCommand.Source) run build."
         Push-Location $repoRootPath
         try {
-            & $npmCommand.Source run ui:build *>> $LogPath
+            & $npmCommand.Source run build *>> $LogPath
             $buildExitCode = $LASTEXITCODE
         } finally {
             Pop-Location
         }
 
         if ($buildExitCode -ne 0) {
-            throw "Frontend UI build failed with code $buildExitCode."
+            throw "App build failed with code $buildExitCode."
         }
     } else {
-        Write-ServiceLog "npm was not found; backend startup will require an existing frontend build."
+        Write-ServiceLog "npm was not found; backend startup will require existing frontend and backend builds."
     }
 
-    $serverPath = Join-Path $repoRootPath "server.js"
+    $serverPath = Join-Path $repoRootPath "dist\server\server.js"
 
     if (-not (Test-Path -LiteralPath $serverPath)) {
-        throw "server.js was not found at $serverPath"
+        throw "Compiled backend was not found at $serverPath"
     }
 
     Write-ServiceLog "Starting backend with $NodePath $serverPath."

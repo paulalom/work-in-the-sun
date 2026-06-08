@@ -1,9 +1,11 @@
+import type { JsonRecord } from "./lib/types";
+
 const agentStore = require("./lib/agent-store");
 
 const PROTOCOL_VERSION = "2025-03-26";
 const MAX_MCP_MESSAGE_BYTES = finitePositiveNumber(process.env.WITS_MCP_MESSAGE_BYTES, 256 * 1024);
 
-function finitePositiveNumber(value, fallback) {
+function finitePositiveNumber(value: unknown, fallback: number): number {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
@@ -145,11 +147,11 @@ const tools = [
   },
 ];
 
-function writeMessage(message) {
+function writeMessage(message: any) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
-function success(id, result) {
+function success(id: any, result: any) {
   return {
     jsonrpc: "2.0",
     id,
@@ -157,7 +159,7 @@ function success(id, result) {
   };
 }
 
-function failure(id, code, message, data) {
+function failure(id: any, code: number, message: string, data?: any) {
   return {
     jsonrpc: "2.0",
     id,
@@ -169,7 +171,7 @@ function failure(id, code, message, data) {
   };
 }
 
-function toolText(text, isError = false) {
+function toolText(text: string, isError = false) {
   return {
     content: [
       {
@@ -181,7 +183,7 @@ function toolText(text, isError = false) {
   };
 }
 
-function conciseReplyInstructions(preferences) {
+function conciseReplyInstructions(preferences: JsonRecord) {
   if (!preferences.enabled) {
     return "MCP concise replies are disabled. Resume the agent's normal chat and feedback style.";
   }
@@ -197,7 +199,7 @@ function conciseReplyInstructions(preferences) {
   ].join("\n");
 }
 
-async function callTool(name, args = {}) {
+async function callTool(name: string, args: JsonRecord = {}) {
   switch (name) {
     case "send_feedback": {
       const target = args.targetId
@@ -263,7 +265,7 @@ async function callTool(name, args = {}) {
   }
 }
 
-async function handleRequest(message) {
+async function handleRequest(message: JsonRecord) {
   const id = message.id;
 
   try {
@@ -305,7 +307,7 @@ async function handleRequest(message) {
   }
 }
 
-async function handleMessage(message) {
+async function handleMessage(message: any) {
   if (!message || typeof message !== "object") {
     return failure(null, -32600, "Invalid request.");
   }
@@ -317,7 +319,7 @@ async function handleMessage(message) {
   return handleRequest(message);
 }
 
-async function handleLine(line) {
+async function handleLine(line: string) {
   let message;
 
   try {

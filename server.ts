@@ -1,3 +1,5 @@
+import type { JsonRecord } from "./lib/types";
+
 const { spawn } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -6,29 +8,33 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 
-loadLocalEnv(path.join(__dirname, ".local", "service.env"));
+const { PROJECT_ROOT } = require("./lib/project-root");
+
+type RunResult = { stdout: string; stderr: string };
+
+loadLocalEnv(path.join(PROJECT_ROOT, ".local", "service.env"));
 
 const agentStore = require("./lib/agent-store");
 const codexBridge = require("./lib/codex-bridge");
 const codexCatalog = require("./lib/codex-catalog");
 const windowScreenshot = require("./lib/window-screenshot");
-const packageJson = require("./package.json");
+const packageJson = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, "package.json"), "utf8"));
 
 const DEFAULT_PORT = 38173;
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.WITS_HTTP_PORT || process.env.PORT || DEFAULT_PORT);
-const APP_DIR = path.join(__dirname, "dist", "app");
+const APP_DIR = path.join(PROJECT_ROOT, "dist", "app");
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_SCREENSHOT_BYTES = finitePositiveNumber(process.env.WITS_MAX_SCREENSHOT_BYTES, 16 * 1024 * 1024);
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
 const SILENCE_RMS_THRESHOLD = Number(process.env.SILENCE_RMS_THRESHOLD || 0.003);
 const SILENCE_PEAK_THRESHOLD = Number(process.env.SILENCE_PEAK_THRESHOLD || 0.02);
-const PIN_PATH = process.env.WITS_PIN_PATH || path.join(__dirname, ".local", "access-pin");
+const PIN_PATH = process.env.WITS_PIN_PATH || path.join(PROJECT_ROOT, ".local", "access-pin");
 const PIN_FAILURE_LOG_PATH =
-  process.env.WITS_PIN_FAILURE_LOG_PATH || path.join(__dirname, ".local", "pin-failures.log");
-const PIN_LOCKOUT_PATH = process.env.WITS_PIN_LOCKOUT_PATH || path.join(__dirname, ".local", "pin-lockout.json");
-const PIN_KEY_PATH = process.env.WITS_PIN_KEY_PATH || path.join(__dirname, ".local", "pin-unlock-key.json");
+  process.env.WITS_PIN_FAILURE_LOG_PATH || path.join(PROJECT_ROOT, ".local", "pin-failures.log");
+const PIN_LOCKOUT_PATH = process.env.WITS_PIN_LOCKOUT_PATH || path.join(PROJECT_ROOT, ".local", "pin-lockout.json");
+const PIN_KEY_PATH = process.env.WITS_PIN_KEY_PATH || path.join(PROJECT_ROOT, ".local", "pin-unlock-key.json");
 const ACCESS_PIN = readSecret(process.env.WITS_ACCESS_PIN, PIN_PATH);
 const PIN_ENABLED = Boolean(ACCESS_PIN);
 const CONFIGURED_ACCESS_TOKEN = String(process.env.WITS_ACCESS_TOKEN || process.env.WORK_IN_THE_SUN_TOKEN || "").trim();
@@ -56,9 +62,9 @@ const APP_VERSION = String(packageJson.version || "0.0.0");
 
 const LOCAL_DICTATE_CANDIDATES = [
   process.env.LOCAL_DICTATE_ROOT,
-  path.join(__dirname, "vendor", "local-dictate"),
-  path.resolve(__dirname, "..", "local-dictate"),
-].filter(Boolean);
+  path.join(PROJECT_ROOT, "vendor", "local-dictate"),
+  path.resolve(PROJECT_ROOT, "..", "local-dictate"),
+].filter(Boolean) as string[];
 
 const MIME_TYPES = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -114,7 +120,9 @@ function loadLocalEnv(filePath) {
 }
 
 class HttpError extends Error {
-  constructor(status, message) {
+  status: number;
+
+  constructor(status: number, message: string) {
     super(message);
     this.status = status;
   }
@@ -231,7 +239,7 @@ function loadOrCreatePinKeyPair() {
   };
 }
 
-function securityHeaders(extra = {}) {
+function securityHeaders(extra: JsonRecord = {}) {
   return {
     "Cache-Control": "no-store",
     "Content-Security-Policy":
@@ -245,7 +253,7 @@ function securityHeaders(extra = {}) {
   };
 }
 
-function json(response, status, body) {
+function json(response: any, status: number, body: any) {
   const payload = Buffer.from(JSON.stringify(body));
   response.writeHead(status, securityHeaders({
     "Content-Type": "application/json; charset=utf-8",
@@ -254,7 +262,7 @@ function json(response, status, body) {
   response.end(payload);
 }
 
-function text(response, status, body, headers = {}) {
+function text(response: any, status: number, body: string, headers: JsonRecord = {}) {
   const payload = Buffer.from(body);
   response.writeHead(status, securityHeaders({
     "Content-Type": "text/plain; charset=utf-8",
@@ -463,8 +471,8 @@ function assertAudioRequest(request) {
   }
 }
 
-function resolveLocalDictate() {
-  const attempted = [];
+function resolveLocalDictate(): JsonRecord {
+  const attempted: JsonRecord[] = [];
 
   for (const root of LOCAL_DICTATE_CANDIDATES) {
     const candidate = localDictatePaths(root);
@@ -482,7 +490,7 @@ function resolveLocalDictate() {
   };
 }
 
-function localDictatePaths(root) {
+function localDictatePaths(root: string): JsonRecord {
   const isWindows = process.platform === "win32";
   const cliNames = isWindows
     ? [
@@ -517,7 +525,7 @@ function localDictatePaths(root) {
   };
 }
 
-function firstExisting(root, relativePaths) {
+function firstExisting(root: string, relativePaths: string[]) {
   for (const relativePath of relativePaths) {
     const candidate = path.join(root, relativePath);
 
@@ -529,7 +537,7 @@ function firstExisting(root, relativePaths) {
   return path.join(root, relativePaths[0]);
 }
 
-function isFile(filePath) {
+function isFile(filePath: string) {
   try {
     return fs.statSync(filePath).isFile();
   } catch {
@@ -605,13 +613,13 @@ function findWavDataOffset(wav) {
   return -1;
 }
 
-function readBody(request, maxBytes) {
+function readBody(request: any, maxBytes: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const chunks = [];
+    const chunks: Buffer[] = [];
     let size = 0;
     let tooLarge = false;
 
-    request.on("data", (chunk) => {
+    request.on("data", (chunk: Buffer) => {
       if (tooLarge) {
         return;
       }
@@ -633,7 +641,7 @@ function readBody(request, maxBytes) {
   });
 }
 
-async function readJson(request, maxBytes) {
+async function readJson(request: any, maxBytes: number): Promise<JsonRecord> {
   assertJsonRequest(request);
   const body = await readBody(request, maxBytes);
 
@@ -654,7 +662,7 @@ async function readJson(request, maxBytes) {
   }
 }
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: JsonRecord = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const timeoutMs = options.timeoutMs || CHILD_PROCESS_TIMEOUT_MS;
     const maxOutputBytes = options.maxOutputBytes || CHILD_PROCESS_OUTPUT_BYTES;
@@ -675,7 +683,7 @@ function run(command, args, options = {}) {
       child.kill();
     }, timeoutMs);
 
-    function settle(callback, value) {
+    function settle(callback: (value: any) => void, value: any) {
       if (settled) {
         return;
       }
@@ -685,7 +693,7 @@ function run(command, args, options = {}) {
       callback(value);
     }
 
-    function appendOutput(current, chunk) {
+    function appendOutput(current: string, chunk: Buffer) {
       if (Buffer.byteLength(current) + chunk.length > maxOutputBytes) {
         outputTooLarge = true;
         child.kill();
@@ -859,7 +867,7 @@ async function synthesize(request, response) {
 
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "work-in-the-sun-tts-"));
   const wavPath = path.join(tempRoot, `${crypto.randomUUID()}.wav`);
-  const scriptPath = path.join(__dirname, "scripts", "synthesize-speech.ps1");
+  const scriptPath = path.join(PROJECT_ROOT, "scripts", "synthesize-speech.ps1");
 
   try {
     await run(
@@ -1088,7 +1096,7 @@ async function unlockSession(request, response) {
   await failPinUnlock(request, response);
 }
 
-async function resolveAgentTargetInput(input = {}) {
+async function resolveAgentTargetInput(input: JsonRecord = {}) {
   const target = { ...input };
   const provider = String(target.provider || target.agent || "").trim().toLowerCase();
   const mode = target.mode === "new" || target.new ? "new" : "existing";
@@ -1125,7 +1133,7 @@ async function updateAgentTarget(request, response) {
   json(response, 200, { target });
 }
 
-function targetForRenamedChat(previousTarget = {}, chat = {}) {
+function targetForRenamedChat(previousTarget: JsonRecord = {}, chat: JsonRecord = {}) {
   const label = chat.projectLabel ? `${chat.projectLabel} / ${chat.label}` : `Codex / ${chat.label}`;
 
   return {

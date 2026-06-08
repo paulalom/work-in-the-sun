@@ -4,8 +4,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 
-function loadFreshCatalog(env) {
-  const previous = {};
+function loadFreshCatalog(env: Record<string, string>) {
+  const previous: Record<string, string | undefined> = {};
 
   for (const key of Object.keys(env)) {
     previous[key] = process.env[key];
