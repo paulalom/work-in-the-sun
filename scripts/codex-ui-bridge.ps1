@@ -518,6 +518,39 @@ function Invoke-Element {
   }
 }
 
+function Get-ExpandCollapseState {
+  param($Element)
+
+  try {
+    $pattern = $Element.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    return $pattern.Current.ExpandCollapseState
+  } catch {
+    return $null
+  }
+}
+
+function Expand-ElementIfCollapsed {
+  param($Element)
+
+  try {
+    $pattern = $Element.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    $state = $pattern.Current.ExpandCollapseState
+
+    if ($state -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
+      $pattern.Expand()
+      return
+    }
+
+    if ($state -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+      return
+    }
+  } catch {
+    # Fall back to the existing invoke/click behavior for project rows without an expand pattern.
+  }
+
+  Invoke-Element $Element
+}
+
 function Select-TargetChat {
   param($Root, [string]$Label, [string]$Title)
 
@@ -652,6 +685,7 @@ function Find-ProjectElement {
     $name = [string]$current.Name
     $normalizedName = Normalize-MatchText $name
     $isSidebarItem =
+      -not $current.IsOffscreen -and
       $rect.X -lt ($rootRect.X + 420) -and
       $rect.Width -gt 40 -and
       $rect.Height -gt 12 -and
@@ -743,7 +777,10 @@ function Select-TargetProject {
   param($Root, [string]$Label, [string]$WorkspacePath)
 
   if ([string]::IsNullOrWhiteSpace($Label) -and [string]::IsNullOrWhiteSpace($WorkspacePath)) {
-    return ""
+    return [pscustomobject]@{
+      ProjectName = ""
+      NewChatButton = $null
+    }
   }
 
   $projectElement = Find-ProjectElement $Root $Label $WorkspacePath
@@ -763,12 +800,37 @@ function Select-TargetProject {
     throw "Codex project '$display' was not visible in the sidebar. New chat was not created."
   }
 
-  Invoke-Element $projectElement
-  Start-Sleep -Milliseconds 650
-  return [string]$projectElement.Current.Name
+  $projectName = [string]$projectElement.Current.Name
+  $expandState = Get-ExpandCollapseState $projectElement
+  $newChatButton = $null
+
+  if ($expandState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
+    Expand-ElementIfCollapsed $projectElement
+    Start-Sleep -Milliseconds 650
+  }
+
+  $newChatButton = Find-NewChatButton $Root $projectElement
+
+  if (-not $newChatButton) {
+    if ($expandState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+      Expand-ElementIfCollapsed $projectElement
+      Start-Sleep -Milliseconds 650
+      $newChatButton = Find-NewChatButton $Root $projectElement
+    }
+  }
+
+  if (-not $newChatButton) {
+    $display = if ([string]::IsNullOrWhiteSpace($Label)) { $WorkspacePath } else { $Label }
+    throw "Codex project '$display' was found, but its New Chat button was not visible. New chat was not created."
+  }
+
+  return [pscustomobject]@{
+    ProjectName = $projectName
+    NewChatButton = $newChatButton
+  }
 }
 
-function Find-NewChatButton {
+function Get-NewChatButtonCandidates {
   param($Root)
 
   $all = Get-Descendants $Root
@@ -786,6 +848,7 @@ function Find-NewChatButton {
       -not $current.IsEnabled -or
       $current.ControlType -ne [System.Windows.Automation.ControlType]::Button -or
       -not $normalizedName -or
+      $current.IsOffscreen -or
       $rect.Width -lt 12 -or
       $rect.Height -lt 12
     ) {
@@ -818,8 +881,112 @@ function Find-NewChatButton {
 
     $candidates += [pscustomobject]@{
       Element = $element
+      Rect = $rect
       Score = $score
     }
+  }
+
+  return $candidates
+}
+
+function Test-SidebarItemBetween {
+  param($Root, [double]$StartY, [double]$EndY)
+
+  if ($EndY -le $StartY) {
+    return $false
+  }
+
+  $all = Get-Descendants $Root
+  $rootRect = $Root.Current.BoundingRectangle
+
+  for ($i = 0; $i -lt $all.Count; $i++) {
+    $element = $all.Item($i)
+    $current = $element.Current
+    $rect = $current.BoundingRectangle
+    $name = [string]$current.Name
+    $normalizedName = Normalize-MatchText $name
+    $isSidebarItem =
+      -not $current.IsOffscreen -and
+      $rect.X -lt ($rootRect.X + 420) -and
+      $rect.Width -gt 40 -and
+      $rect.Height -gt 12 -and
+      $rect.Y -gt $StartY -and
+      $rect.Y -lt $EndY -and
+      (
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::Button -or
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -or
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::TreeItem -or
+        $current.ControlType -eq [System.Windows.Automation.ControlType]::Text
+      )
+
+    if (-not $isSidebarItem -or -not $normalizedName) {
+      continue
+    }
+
+    if ($normalizedName -in @("new chat", "new conversation", "new thread", "show more", "show all projects")) {
+      continue
+    }
+
+    return $true
+  }
+
+  return $false
+}
+
+function Find-ProjectScopedNewChatButton {
+  param($Root, $ProjectElement, $Candidates)
+
+  if (-not $ProjectElement -or $Candidates.Count -lt 1) {
+    return $null
+  }
+
+  $rootRect = $Root.Current.BoundingRectangle
+  $projectRect = $ProjectElement.Current.BoundingRectangle
+  $projectTop = [double]$projectRect.Y
+  $projectBottom = [double]($projectRect.Y + $projectRect.Height)
+  $projectCenterX = [double]($projectRect.X + ($projectRect.Width / 2))
+  $scopedCandidates = @()
+
+  foreach ($candidate in $Candidates) {
+    $rect = $candidate.Rect
+    $centerY = [double]($rect.Y + ($rect.Height / 2))
+    $centerX = [double]($rect.X + ($rect.Width / 2))
+    $sameSidebar = $rect.X -lt ($rootRect.X + 420)
+    $nearProject =
+      $centerY -ge ($projectTop - 8) -and
+      $rect.Y -le ($projectBottom + 90)
+
+    if (-not $sameSidebar -or -not $nearProject) {
+      continue
+    }
+
+    if (Test-SidebarItemBetween $Root $projectBottom $rect.Y) {
+      continue
+    }
+
+    $verticalDistance = [Math]::Max(0, [int]($centerY - $projectBottom))
+    $horizontalDistance = [Math]::Abs([int]($centerX - $projectCenterX))
+
+    $scopedCandidates += [pscustomobject]@{
+      Element = $candidate.Element
+      Score = ($verticalDistance * 10) + $horizontalDistance
+    }
+  }
+
+  if ($scopedCandidates.Count -lt 1) {
+    return $null
+  }
+
+  return ($scopedCandidates | Sort-Object Score | Select-Object -First 1).Element
+}
+
+function Find-NewChatButton {
+  param($Root, $ProjectElement = $null)
+
+  $candidates = @(Get-NewChatButtonCandidates $Root)
+
+  if ($ProjectElement) {
+    return Find-ProjectScopedNewChatButton $Root $ProjectElement $candidates
   }
 
   if ($candidates.Count -lt 1) {
@@ -830,9 +997,13 @@ function Find-NewChatButton {
 }
 
 function Invoke-NewChat {
-  param($Root)
+  param($Root, $Button = $null)
 
-  $button = Find-NewChatButton $Root
+  $button = $Button
+
+  if (-not $button) {
+    $button = Find-NewChatButton $Root
+  }
 
   if ($button) {
     Invoke-Element $button
@@ -961,10 +1132,13 @@ try {
 
   $newChatStarted = $false
   $projectName = ""
+  $newChatButton = $null
 
   if ($ShouldCreateNewChat) {
-    $projectName = Select-TargetProject $window.Root $ProjectLabel $Workspace
-    $chatTitle = Invoke-NewChat $window.Root
+    $projectSelection = Select-TargetProject $window.Root $ProjectLabel $Workspace
+    $projectName = $projectSelection.ProjectName
+    $newChatButton = $projectSelection.NewChatButton
+    $chatTitle = Invoke-NewChat $window.Root $newChatButton
   } else {
     $chatTitle = Select-TargetChat $window.Root $TargetLabel $TargetTitle
     Assert-SelectedChatMatches $chatTitle (Resolve-ExpectedChatTitle $TargetLabel $TargetTitle) $TargetLabel
