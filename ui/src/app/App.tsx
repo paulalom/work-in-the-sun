@@ -171,6 +171,10 @@ export function draftWithAppendedText(currentDraft: string, nextText: string) {
   return current ? `${current} ${next}` : next;
 }
 
+export function draftWithDictationText(currentDraft: string, nextText: string, appendEnabled: boolean) {
+  return appendEnabled ? draftWithAppendedText(currentDraft, nextText) : nextText.trim();
+}
+
 function feedKeyFromMessage(message: FeedMessage) {
   return message.feedKey || GLOBAL_FEED_KEY;
 }
@@ -263,6 +267,7 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [echoEnabled, setEchoEnabled] = useState(false);
   const [autoSendEnabled, setAutoSendEnabled] = useState(false);
+  const [appendDictationEnabled, setAppendDictationEnabled] = useState(true);
   const [responseAudioEnabled, setResponseAudioEnabled] = useState(false);
   const [commandModeEnabled, setCommandModeEnabled] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
@@ -290,6 +295,7 @@ export function App() {
   const commandFeedKeysRef = useRef<Record<string, string>>({});
   const echoRef = useRef(echoEnabled);
   const autoSendRef = useRef(autoSendEnabled);
+  const appendDictationRef = useRef(appendDictationEnabled);
   const responseAudioRef = useRef(responseAudioEnabled);
   const commandModeRef = useRef(commandModeEnabled);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -333,6 +339,10 @@ export function App() {
   useEffect(() => {
     autoSendRef.current = autoSendEnabled;
   }, [autoSendEnabled]);
+
+  useEffect(() => {
+    appendDictationRef.current = appendDictationEnabled;
+  }, [appendDictationEnabled]);
 
   useEffect(() => {
     responseAudioRef.current = responseAudioEnabled;
@@ -1247,7 +1257,7 @@ export function App() {
       return;
     }
 
-    appendDraftText(text);
+    setDraftText(draftWithDictationText(draftRef.current, text, appendDictationRef.current));
 
     if (echoRef.current) {
       const spoken = await speak(text);
@@ -2125,6 +2135,14 @@ export function App() {
                     onChange={(checked) => {
                       setAutoSendEnabled(checked);
                       setWorkStatus("idle", "Ready", checked ? "Auto Send on" : "Auto Send off");
+                    }}
+                  />
+                  <ToggleControl
+                    label="Append"
+                    checked={appendDictationEnabled}
+                    onChange={(checked) => {
+                      setAppendDictationEnabled(checked);
+                      setWorkStatus("idle", "Ready", checked ? "Dictation appends" : "Dictation replaces");
                     }}
                   />
                   <ToggleControl label="Responses" checked={responseAudioEnabled} onChange={handleResponseAudioChange} />

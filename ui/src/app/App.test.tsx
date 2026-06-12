@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { draftWithAppendedText, feedKeyFromAgentEvent, feedKeyFromTarget, GLOBAL_FEED_KEY } from "./App";
+import {
+  draftWithAppendedText,
+  draftWithDictationText,
+  feedKeyFromAgentEvent,
+  feedKeyFromTarget,
+  GLOBAL_FEED_KEY,
+} from "./App";
 
 describe("feedKeyFromTarget", () => {
   it("keeps new targets in the uncategorized feed until Codex returns a thread id", () => {
@@ -73,5 +79,15 @@ describe("draftWithAppendedText", () => {
 
   it("trims the join without disturbing leading draft whitespace", () => {
     expect(draftWithAppendedText("  First message  ", "  Second message  ")).toBe("  First message Second message");
+  });
+});
+
+describe("draftWithDictationText", () => {
+  it("appends dictated text when append mode is enabled", () => {
+    expect(draftWithDictationText("First message", "Second message", true)).toBe("First message Second message");
+  });
+
+  it("replaces the draft when append mode is disabled", () => {
+    expect(draftWithDictationText("First message", "Second message", false)).toBe("Second message");
   });
 });
