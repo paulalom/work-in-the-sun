@@ -981,6 +981,7 @@ async function resolveThread(client: CodexAppServerClient, command: JsonRecord, 
 
     const activeTarget = await agentStore.setActiveTarget(targetForThread(command, threadId, target));
     command.target = activeTarget;
+    await agentStore.appendThreadCommandMessage(command).catch(() => {});
     await appendBridgeEvent(command, {
       level: "system",
       text: `Created Codex chat ${activeTarget.label}.`,

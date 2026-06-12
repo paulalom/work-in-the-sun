@@ -11,6 +11,7 @@ export interface FeedMessage {
   feedKey?: string;
   type: FeedMessageType;
   text: string;
+  receivedAt?: string;
   dispatchStatus?: DispatchStatus;
   dispatchLabel?: string;
   screenshotUrl?: string;
@@ -131,6 +132,7 @@ export interface CatalogChat {
   busy?: boolean;
   lastCommandAt?: string;
   lastEventAt?: string;
+  messages?: FeedMessage[];
 }
 
 export interface CatalogProjectResponse {

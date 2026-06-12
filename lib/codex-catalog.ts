@@ -764,8 +764,15 @@ async function listChats(options: JsonRecord = {}) {
 
   const { after, limit } = pageOptions(options);
   const selected = await enrichSessionWorkspaces(sorted.slice(after, after + limit), { refresh: true });
-  const activity = await threadActivityIndex();
-  const chats = selected.map((session) => ({
+  const [activity, threadMessages] = await Promise.all([
+    threadActivityIndex(),
+    Promise.all(
+      selected.map((session) =>
+        agentStore.readThreadMessages({ provider: "codex", sessionHint: session.id }, { limit: options.messageLimit }),
+      ),
+    ),
+  ]);
+  const chats = selected.map((session, index) => ({
     id: session.id,
     label: session.label,
     updatedAt: session.updatedAt,
@@ -774,6 +781,7 @@ async function listChats(options: JsonRecord = {}) {
     busy: Boolean(activity.get(session.id)?.busy),
     lastCommandAt: activity.get(session.id)?.lastCommandAt,
     lastEventAt: activity.get(session.id)?.lastEventAt,
+    messages: threadMessages[index] || [],
   }));
 
   return {

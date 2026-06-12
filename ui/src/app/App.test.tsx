@@ -6,6 +6,7 @@ import {
   feedKeyFromAgentEvent,
   feedKeyFromTarget,
   GLOBAL_FEED_KEY,
+  mergeThreadContextMessages,
 } from "./App";
 
 describe("feedKeyFromTarget", () => {
@@ -88,6 +89,60 @@ describe("compareThreadItems", () => {
     ].sort(compareThreadItems);
 
     expect(items.map((item) => item.order)).toEqual([0, 1, 2]);
+  });
+});
+
+describe("mergeThreadContextMessages", () => {
+  it("hydrates thread messages with the selected feed key", () => {
+    const merged = mergeThreadContextMessages([], "codex:thread:abc", [
+      {
+        id: "event-1",
+        type: "agent",
+        text: "Done.",
+      },
+    ]);
+
+    expect(merged).toEqual([
+      {
+        id: "event-1",
+        feedKey: "codex:thread:abc",
+        type: "agent",
+        text: "Done.",
+        receivedAt: undefined,
+        dispatchStatus: undefined,
+        dispatchLabel: undefined,
+      },
+    ]);
+  });
+
+  it("does not duplicate live messages when context arrives later", () => {
+    const merged = mergeThreadContextMessages(
+      [
+        {
+          id: "live-1",
+          feedKey: "codex:thread:abc",
+          type: "agent",
+          text: "Already shown.",
+        },
+      ],
+      "codex:thread:abc",
+      [
+        {
+          id: "event-1",
+          type: "agent",
+          text: "Already shown.",
+        },
+      ],
+    );
+
+    expect(merged).toEqual([
+      {
+        id: "live-1",
+        feedKey: "codex:thread:abc",
+        type: "agent",
+        text: "Already shown.",
+      },
+    ]);
   });
 });
 

@@ -60,6 +60,7 @@ export const GLOBAL_FEED_KEY = "global";
 const UNCATEGORIZED_THREAD_LABEL = "Uncategorized";
 const TARGET_SWITCH_NOTICE_PATTERN = /^Using .+\.$/;
 const CATALOG_PAGE_LIMIT = 5;
+const FEED_MESSAGE_TYPES = new Set<FeedMessageType>(["agent", "system", "user", "warning"]);
 
 interface SpeechRecognitionConstructor {
   new (): SpeechRecognitionLike;
@@ -189,6 +190,20 @@ export function compareThreadItems(left: SortableThreadItem, right: SortableThre
   return right.sortAt - left.sortAt || left.order - right.order;
 }
 
+export function formatFeedMessageText(text: string) {
+  const value = String(text || "");
+
+  if (value.length <= MAX_FEED_MESSAGE_CHARS) {
+    return value;
+  }
+
+  return `${value.slice(0, MAX_FEED_MESSAGE_CHARS - FEED_TRUNCATION_SUFFIX.length).trimEnd()}${FEED_TRUNCATION_SUFFIX}`;
+}
+
+function normalizeFeedMessageType(type: unknown): FeedMessageType {
+  return FEED_MESSAGE_TYPES.has(type as FeedMessageType) ? (type as FeedMessageType) : "agent";
+}
+
 function feedKeyFromMessage(message: FeedMessage) {
   return message.feedKey || GLOBAL_FEED_KEY;
 }
@@ -211,6 +226,50 @@ function pruneFeedMessages(messages: FeedMessage[]) {
   }
 
   return kept.reverse();
+}
+
+function feedMessageDuplicateKey(message: FeedMessage) {
+  return [feedKeyFromMessage(message), message.type, message.text, message.dispatchStatus || ""].join("\u001f");
+}
+
+export function mergeThreadContextMessages(
+  current: FeedMessage[],
+  feedKey: string,
+  incoming: FeedMessage[] = [],
+) {
+  const existingIds = new Set(current.map((message) => message.id));
+  const existingMessages = new Set(current.map(feedMessageDuplicateKey));
+  const hydrated: FeedMessage[] = [];
+
+  incoming.forEach((message, index) => {
+    const text = formatFeedMessageText(message.text);
+
+    if (!text) {
+      return;
+    }
+
+    hydrated.push({
+      id: String(message.id || `thread-context:${feedKey}:${index}`),
+      feedKey,
+      type: normalizeFeedMessageType(message.type),
+      text,
+      receivedAt: message.receivedAt,
+      dispatchStatus: message.dispatchStatus,
+      dispatchLabel: message.dispatchLabel,
+    });
+  });
+
+  const nextMessages = hydrated.filter((message) => {
+    const duplicate = existingIds.has(message.id) || existingMessages.has(feedMessageDuplicateKey(message));
+
+    if (!duplicate) {
+      existingIds.add(message.id);
+    }
+
+    return !duplicate;
+  });
+
+  return nextMessages.length ? pruneFeedMessages([...current, ...nextMessages]) : current;
 }
 
 function isTargetSwitchNotice(message: FeedMessage) {
@@ -307,6 +366,7 @@ export function App() {
   const selectedFeedKeyRef = useRef(selectedFeedKey);
   const nextThreadOrderRef = useRef(0);
   const commandFeedKeysRef = useRef<Record<string, string>>({});
+  const hydratedThreadMessagesRef = useRef<Set<string>>(new Set());
   const echoRef = useRef(echoEnabled);
   const autoSendRef = useRef(autoSendEnabled);
   const appendDictationRef = useRef(appendDictationEnabled);
@@ -437,6 +497,11 @@ export function App() {
 
     if (!chats.length) {
       return;
+    }
+
+    for (const chat of chats) {
+      const feedKey = feedKeyFromTarget(chatTarget(chat));
+      hydrateThreadContext(feedKey, chat.messages || []);
     }
 
     setThreadOrder((current) => {
@@ -768,6 +833,20 @@ export function App() {
     });
   }
 
+  function hydrateThreadContext(feedKey: string, threadMessages: FeedMessage[] = []) {
+    if (!feedKey || hydratedThreadMessagesRef.current.has(feedKey)) {
+      return;
+    }
+
+    hydratedThreadMessagesRef.current.add(feedKey);
+
+    if (!threadMessages.length) {
+      return;
+    }
+
+    setMessages((current) => mergeThreadContextMessages(current, feedKey, threadMessages));
+  }
+
   function addMessage(
     text: string,
     type: FeedMessageType = "system",
@@ -831,16 +910,6 @@ export function App() {
           setWorkStatus("idle", "Ready", "Response audio unavailable");
         }
       });
-  }
-
-  function formatFeedMessageText(text: string) {
-    const value = String(text || "");
-
-    if (value.length <= MAX_FEED_MESSAGE_CHARS) {
-      return value;
-    }
-
-    return `${value.slice(0, MAX_FEED_MESSAGE_CHARS - FEED_TRUNCATION_SUFFIX.length).trimEnd()}${FEED_TRUNCATION_SUFFIX}`;
   }
 
   function announceCommand(message: string, detail = message.replace(/\.$/, "")) {
