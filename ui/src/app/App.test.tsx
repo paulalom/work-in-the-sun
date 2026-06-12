@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  compareThreadItems,
   draftWithAppendedText,
   draftWithDictationText,
   feedKeyFromAgentEvent,
@@ -65,6 +66,28 @@ describe("feedKeyFromAgentEvent", () => {
         { "cmd-1": GLOBAL_FEED_KEY },
       ),
     ).toBe("codex:thread:123e4567-e89b-12d3-a456-426614174000");
+  });
+});
+
+describe("compareThreadItems", () => {
+  it("keeps uncategorized left of more active chats", () => {
+    const items = [
+      { kind: "chat" as const, order: 0, sortAt: 300 },
+      { kind: "uncategorized" as const, order: Number.MAX_SAFE_INTEGER, sortAt: 0 },
+      { kind: "chat" as const, order: 1, sortAt: 500 },
+    ].sort(compareThreadItems);
+
+    expect(items.map((item) => item.kind)).toEqual(["uncategorized", "chat", "chat"]);
+  });
+
+  it("keeps regular chats sorted by activity and then order", () => {
+    const items = [
+      { kind: "chat" as const, order: 2, sortAt: 300 },
+      { kind: "chat" as const, order: 1, sortAt: 500 },
+      { kind: "chat" as const, order: 0, sortAt: 500 },
+    ].sort(compareThreadItems);
+
+    expect(items.map((item) => item.order)).toEqual([0, 1, 2]);
   });
 });
 

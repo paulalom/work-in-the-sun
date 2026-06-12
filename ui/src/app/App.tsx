@@ -175,6 +175,20 @@ export function draftWithDictationText(currentDraft: string, nextText: string, a
   return appendEnabled ? draftWithAppendedText(currentDraft, nextText) : nextText.trim();
 }
 
+interface SortableThreadItem {
+  kind: "chat" | "uncategorized";
+  order: number;
+  sortAt: number;
+}
+
+export function compareThreadItems(left: SortableThreadItem, right: SortableThreadItem) {
+  if (left.kind !== right.kind) {
+    return left.kind === "uncategorized" ? -1 : 1;
+  }
+
+  return right.sortAt - left.sortAt || left.order - right.order;
+}
+
 function feedKeyFromMessage(message: FeedMessage) {
   return message.feedKey || GLOBAL_FEED_KEY;
 }
@@ -2073,7 +2087,7 @@ export function App() {
       order: Number.MAX_SAFE_INTEGER,
       sortAt: uncategorizedActivity.lastAnyAt || 0,
     },
-  ].sort((left, right) => right.sortAt - left.sortAt || left.order - right.order);
+  ].sort(compareThreadItems);
   const statusSummary = [status.label, status.detail].filter(Boolean).join(": ");
   const appClassName = [
     "app-shell",
