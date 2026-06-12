@@ -160,6 +160,17 @@ export function feedKeyFromAgentEvent(
   return commandFeedKey || targetFeedKey || GLOBAL_FEED_KEY;
 }
 
+export function draftWithAppendedText(currentDraft: string, nextText: string) {
+  const current = currentDraft.trimEnd();
+  const next = nextText.trim();
+
+  if (!next) {
+    return current;
+  }
+
+  return current ? `${current} ${next}` : next;
+}
+
 function feedKeyFromMessage(message: FeedMessage) {
   return message.feedKey || GLOBAL_FEED_KEY;
 }
@@ -828,8 +839,7 @@ export function App() {
   }
 
   function appendDraftText(text: string) {
-    const current = draftRef.current.trimEnd();
-    setDraftText(current ? `${current} ${text}` : text);
+    setDraftText(draftWithAppendedText(draftRef.current, text));
   }
 
   function prependDraftText(text: string) {
@@ -1237,7 +1247,7 @@ export function App() {
       return;
     }
 
-    setDraftText(text);
+    appendDraftText(text);
 
     if (echoRef.current) {
       const spoken = await speak(text);

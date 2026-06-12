@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { feedKeyFromAgentEvent, feedKeyFromTarget, GLOBAL_FEED_KEY } from "./App";
+import { draftWithAppendedText, feedKeyFromAgentEvent, feedKeyFromTarget, GLOBAL_FEED_KEY } from "./App";
 
 describe("feedKeyFromTarget", () => {
   it("keeps new targets in the uncategorized feed until Codex returns a thread id", () => {
@@ -59,5 +59,19 @@ describe("feedKeyFromAgentEvent", () => {
         { "cmd-1": GLOBAL_FEED_KEY },
       ),
     ).toBe("codex:thread:123e4567-e89b-12d3-a456-426614174000");
+  });
+});
+
+describe("draftWithAppendedText", () => {
+  it("uses dictated text as the draft when the draft is empty", () => {
+    expect(draftWithAppendedText("", "First message")).toBe("First message");
+  });
+
+  it("appends dictated text to an existing draft", () => {
+    expect(draftWithAppendedText("First message", "Second message")).toBe("First message Second message");
+  });
+
+  it("trims the join without disturbing leading draft whitespace", () => {
+    expect(draftWithAppendedText("  First message  ", "  Second message  ")).toBe("  First message Second message");
   });
 });
